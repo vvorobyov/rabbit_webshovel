@@ -11,10 +11,11 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/0]).
+-export([start_link/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
+	 handle_continue/2,
 	 terminate/2, code_change/3, format_status/2]).
 
 -define(SERVER, ?MODULE).
@@ -30,12 +31,12 @@
 %% Starts the server
 %% @end
 %%--------------------------------------------------------------------
--spec start_link() -> {ok, Pid :: pid()} |
+-spec start_link(Args :: map()) -> {ok, Pid :: pid()} |
 		      {error, Error :: {already_started, pid()}} |
 		      {error, Error :: term()} |
 		      ignore.
-start_link() ->
-    gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
+start_link(Args) ->
+    gen_server:start_link(?MODULE, Args, []).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -52,9 +53,25 @@ start_link() ->
 			      {ok, State :: term(), hibernate} |
 			      {stop, Reason :: term()} |
 			      ignore.
-init([]) ->
+init(Args) ->
     process_flag(trap_exit, true),
-    {ok, #state{}}.
+    {ok, not_init, {continue, Args}}.
+
+%%--------------------------------------------------------------------
+%% @private
+%% @doc
+%% Handling continue messages
+%% @end
+%%--------------------------------------------------------------------
+
+handle_continue(Args = #{supervisor := MainSup}, not_init) ->
+    SupChild = supervisor:which_children(MainSup),
+    io:format("~nComsumer started with Args = ~p~n"
+	      "Main sup children ~p~n",
+	      [Args,SupChild]),
+    {noreply, #state{}};    
+handle_continue(_Request, State) ->
+    {noreply, State}.
 
 %%--------------------------------------------------------------------
 %% @private

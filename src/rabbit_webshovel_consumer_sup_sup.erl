@@ -52,25 +52,23 @@ start_link(Args) ->
 		  {ok, {SupFlags :: supervisor:sup_flags(),
 			[ChildSpec :: supervisor:child_spec()]}} |
 		  ignore.
-init(_Args = #{name := Name, connection := Connection, config := Config}) ->
-    io:format("~n==================================================~n"
-    	      "WebShovel Name : ~p~n"
-    	      "Cunsumer sup_sup PID: ~p~n"
-    	      "Connection PID ~p~n"
-    	      "Config ~p~n"
-    	      "~n==================================================~n",
-    	      [Name,self(), Connection, Config]),
+init(Config) ->
     SupFlags = {one_for_one, 1, 5},
-
-    %% AChild = #{id => 'AName',
-    %% 	       start => {'AModule', start_link, []},
-    %% 	       restart => permanent,
-    %% 	       shutdown => 5000,
-    %% 	       type => worker,
-    %% 	       modules => ['AModule']},
-
-    {ok, {SupFlags, []}}.
+    ChildSpecs = make_child_specs(Config),
+    {ok, {SupFlags, ChildSpecs}}.
 
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+make_child_specs(#{name := WSName, supervisor :=Supervisor, config :=Config})->
+    Fun = fun(DstConfig0 = #{name :=Name}, AccIn) ->
+		  DstConfig = DstConfig0#{ws_name => WSName, supervisor => Supervisor},
+		  ChildSpec =  { Name,
+				 {rabbit_webshovel_consumer_sup, start_link, [DstConfig]},
+				 permanent,
+				 16#ffffffff,
+				 supervisor,
+				 [rabbit_webshovel_consumer_sup]},
+		  [ChildSpec|AccIn]
+		end,
+    lists:foldl(Fun, [], Config).

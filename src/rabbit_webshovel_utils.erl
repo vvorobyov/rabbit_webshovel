@@ -42,13 +42,14 @@ parse(WSName, WSConfig)->
 parse_current(WSName, WSConfig)->
     {source, Source0} = proplists:lookup(source, WSConfig),
     validate(Source0),
-    Source1 = parse_source(Source0),
+    Source = parse_source(Source0),
     {destinations, Dest0} = proplists:lookup(destinations, WSConfig),
     validate(Dest0),
     Dest = parse_destinations(Dest0),
-    Source = Source1#{destinations => Dest},
+    %% Source = Source1#{destinations => Dest},
     {ok,  #{name => WSName,
-            config => Source}}.
+            source => Source,
+	    destinations => Dest}}.
 
 parse_source(SrcConfig) ->
     Protocol = proplists:get_value(protocol, SrcConfig, amqp091),

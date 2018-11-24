@@ -52,24 +52,39 @@ start_link(Args) ->
 		  {ok, {SupFlags :: supervisor:sup_flags(),
 			[ChildSpec :: supervisor:child_spec()]}} |
 		  ignore.
-init(Config0 = #{name := Name, 
-		 config := Config}) ->
-    SupFlags = {rest_for_one, 1, 5},
-    WSConfig = Config0#{supervisor => self()},
-    Worker = {{connection,Name},
-    	      {rabbit_webshovel_connection_worker, start_link, [WSConfig]},
-	      case Config of
-		  #{reconnect_delay := N}
-		    when is_integer(N) andalso N > 0 ->
-		      {permanent, N};
-		  _ -> 
-		      permanent
-	      end,
-	      5000,
-	      worker,
-	      [rabbit_webshovel_connection_worker]},
-    {ok, {SupFlags, [Worker]}}.
+init(Config) ->
+    SupFlags = {rest_for_one, 5, 5},
+    ConnectionSpec = make_connection_spec(Config),
+    ConsumerSSupSpec = make_consumers_spec(Config),
+    {ok, {SupFlags, [ConnectionSpec, ConsumerSSupSpec]}}.
 
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+make_connection_spec(#{name := Name, source := SrcConfig0})->
+    SrcConfig = #{name => Name, config => SrcConfig0},
+    Spec = {connection,
+	    {rabbit_webshovel_connection_worker, start_link, [SrcConfig]},
+	    case SrcConfig of
+		#{reconnect_delay := N}
+		  when is_integer(N) andalso N > 0 ->
+		    {permanent, N};
+		_ -> 
+		    permanent
+	    end,
+	    5000,
+	    worker,
+	    [rabbit_webshovel_connection_worker]},
+    Spec.
+
+make_consumers_spec(#{name := Name, destinations := DstConfig0}) ->    
+    DstConfig = #{name => Name,supervisor => self(), config => DstConfig0},
+    Spec = {consumers,
+	    {rabbit_webshovel_consumer_sup_sup,
+	     start_link, [DstConfig]},
+	    permanent, 
+	    16#ffffffff,
+	    supervisor,
+	    [rabbit_webshovel_consumer_sup_sup]},
+    Spec.
+    

@@ -8,33 +8,32 @@
 %%%-------------------------------------------------------------------
 -module(rabbit_webshovel_connection_worker).
 
--behaviour(gen_server).
+-behaviour(gen_server2).
 
 %% API
 -export([start_link/1]).
-
+-export([get_connection/1]).
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-	 handle_continue/2,
 	 terminate/2, code_change/3, format_status/2]).
 
 -define(SERVER, ?MODULE).
 
 -record(state, {name,
-		connection, 
-		supervisor}).
+		connection}).
 
 %%%===================================================================
 %%% API
 %%%===================================================================
-
+get_connection(Pid) ->
+    gen_server:call(Pid, get_connection).
 %%--------------------------------------------------------------------
 %% @doc
 %% Starts the server
 %% @end
 %%--------------------------------------------------------------------
 start_link(Args) ->
-    gen_server:start_link(?MODULE, Args, []).
+    gen_server2:start_link(?MODULE, Args, []).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -46,54 +45,13 @@ start_link(Args) ->
 %% Initializes the server
 %% @end
 %%--------------------------------------------------------------------
-init(#{name :=Name, 
-       supervisor :=Sup, 
-       config := Config = #{amqp_params := AMQPParams,
-		   destinations := DestConfig}}) ->
+init(#{name := Name, 
+       config := #{amqp_params := AMQPParams}}) ->
     process_flag(trap_exit, true),
     rand:seed(exs64, erlang:timestamp()),
     Connection = make_connection(Name, AMQPParams),
-    
-    io:format("~n==================================================~n"
-    	      "Supervisor PID: ~p~n"
-    	      "Worker PID ~p~n"
-    	      "WebShovel Name : ~p~n"
-    	      "Config ~p~n"
-	      "Connection PID ~p~n"
-    	      "~n==================================================~n",
-    	      [Sup,self(), Name, Config, Connection]),
-    
     {ok, #state{name = Name, 
-		connection = Connection, 
-		supervisor = Sup},
-     {continue, {init, DestConfig}}}.
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Handling continue messages
-%% @end
-%%--------------------------------------------------------------------
-handle_continue({init, DestsConfig0}, S= #state{})->
-    DestsConfig = #{name => S#state.name,
-    		    connection => S#state.connection,
-    		    config => DestsConfig0},
-    ConsumerSSupSpec = {{consumers, S#state.name},
-    			{rabbit_webshovel_consumer_sup_sup,
-    			 start_link, [DestsConfig]},
-    			temporary, 
-    			16#ffffffff,
-    			supervisor,
-    			[rabbit_webshovel_consumer_sup_sup]},
-    ConsumSSup = supervisor:start_child(S#state.supervisor, ConsumerSSupSpec),
-    io:format("~n=================================~n"
-    	      "Started Consumer SupSupervisor: ~p"
-    	      "~n==================================~n", 
-    	      [ConsumSSup]),
-    {noreply, S};
-handle_continue(_Other, S) ->
-    {noreply, S}.
-
+		connection = Connection}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -110,6 +68,9 @@ handle_continue(_Other, S) ->
 			 {noreply, NewState :: term(), hibernate} |
 			 {stop, Reason :: term(), Reply :: term(), NewState :: term()} |
 			 {stop, Reason :: term(), NewState :: term()}.
+
+handle_call(get_connection, _From, S=#state{}) ->
+    {reply, S#state.connection, S};
 handle_call(_Request, _From, State) ->
     Reply = {error, error_request},
     {reply, Reply, State}.
