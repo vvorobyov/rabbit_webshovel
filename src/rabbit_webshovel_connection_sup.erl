@@ -8,7 +8,7 @@
 %%%-------------------------------------------------------------------
 -module(rabbit_webshovel_connection_sup).
 
--behaviour(supervisor).
+-behaviour(supervisor2).
 
 %% API
 -export([start_link/1]).
@@ -33,7 +33,7 @@
 		      {error, term()} |
 		      ignore.
 start_link(Args) ->
-    supervisor:start_link(?MODULE, Args).
+    supervisor2:start_link(?MODULE, Args).
 
 %%%===================================================================
 %%% Supervisor callbacks
@@ -52,16 +52,22 @@ start_link(Args) ->
 		  {ok, {SupFlags :: supervisor:sup_flags(),
 			[ChildSpec :: supervisor:child_spec()]}} |
 		  ignore.
-init(Config0 = #{name := Name}) ->
+init(Config0 = #{name := Name, 
+		 config := Config}) ->
     SupFlags = {rest_for_one, 1, 5},
-    Config = Config0#{supervisor => self()},
+    WSConfig = Config0#{supervisor => self()},
     Worker = {Name,
-    	      {rabbit_webshovel_connection_worker, start_link, [Config]},
-    	       permanent,
-    	       5000,
-    	       worker,
-    	       [rabbit_webshovel_connection_worker]},
-
+    	      {rabbit_webshovel_connection_worker, start_link, [WSConfig]},
+	      case Config of
+		  #{reconnect_delay := N}
+		    when is_integer(N) andalso N > 0 ->
+		      {permanent, N};
+		  _ -> 
+		      permanent
+	      end,
+	      5000,
+	      worker,
+	      [rabbit_webshovel_connection_worker]},
     {ok, {SupFlags, [Worker]}}.
 
 %%%===================================================================

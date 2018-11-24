@@ -19,7 +19,8 @@
 
 -define(SERVER, ?MODULE).
 
--record(state, {}).
+-record(state, {connection, 
+		supervisor}).
 
 %%%===================================================================
 %%% API
@@ -30,10 +31,6 @@
 %% Starts the server
 %% @end
 %%--------------------------------------------------------------------
--spec start_link(Args :: map()) -> {ok, Pid :: pid()} |
-		      {error, Error :: {already_started, pid()}} |
-		      {error, Error :: term()} |
-		      ignore.
 start_link(Args) ->
     gen_server2:start_link(?MODULE, Args, []).
 
@@ -47,22 +44,22 @@ start_link(Args) ->
 %% Initializes the server
 %% @end
 %%--------------------------------------------------------------------
--spec init(Args :: term()) -> {ok, State :: term()} |
-			      {ok, State :: term(), Timeout :: timeout()} |
-			      {ok, State :: term(), hibernate} |
-			      {stop, Reason :: term()} |
-			      ignore.
-init(#{name :=Name, supervisor :=Sup, config := Config}) ->
+init(#{name :=Name, 
+       supervisor :=Sup, 
+       config := _Config = #{amqp_params := AMQPParams}}) ->
     process_flag(trap_exit, true),
-    io:format("~n==================================================~n"
-	      "Supervisor PID: ~p~n"
-	      "Worker PID ~p~n"
-	      "WebShovel Name : ~p~n"
-	      "Config ~p~n"
-	      "~n==================================================~n",
-	      [Sup,self(), Name, Config]),
-
-    {ok, #state{}}.
+    rand:seed(exs64, erlang:timestamp()),
+    Connection = make_connection(Name, AMQPParams),
+    
+    %% io:format("~n==================================================~n"
+    %% 	      "Supervisor PID: ~p~n"
+    %% 	      "Worker PID ~p~n"
+    %% 	      "WebShovel Name : ~p~n"
+    %% 	      "Config ~p~n"
+    %% 	      "~n==================================================~n",
+    %% 	      [Sup,self(), Name, Config]),
+    
+    {ok, #state{connection = Connection, supervisor = Sup}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -80,7 +77,7 @@ init(#{name :=Name, supervisor :=Sup, config := Config}) ->
 			 {stop, Reason :: term(), Reply :: term(), NewState :: term()} |
 			 {stop, Reason :: term(), NewState :: term()}.
 handle_call(_Request, _From, State) ->
-    Reply = ok,
+    Reply = {error, error_request},
     {reply, Reply, State}.
 
 %%--------------------------------------------------------------------
@@ -103,11 +100,11 @@ handle_cast(_Request, State) ->
 %% Handling all non call/cast messages
 %% @end
 %%--------------------------------------------------------------------
--spec handle_info(Info :: timeout() | term(), State :: term()) ->
-			 {noreply, NewState :: term()} |
-			 {noreply, NewState :: term(), Timeout :: timeout()} |
-			 {noreply, NewState :: term(), hibernate} |
-			 {stop, Reason :: normal | term(), NewState :: term()}.
+
+%% Сообщение о завершении процесса подключения
+handle_info({'EXIT', Conn, Reason}, S=#state{connection = Conn}) ->
+    {stop, Reason, S};
+%% Обработка прочих сообщений
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -122,7 +119,10 @@ handle_info(_Info, State) ->
 %%--------------------------------------------------------------------
 -spec terminate(Reason :: normal | shutdown | {shutdown, term()} | term(),
 		State :: term()) -> any().
-terminate(_Reason, _State) ->
+terminate({shutdown, {server_initiated_close, _, _}}, _State)->
+    ok;
+terminate(_Reason, S) ->
+    connection_close(S#state.connection),
     ok.
 
 %%--------------------------------------------------------------------
@@ -154,3 +154,49 @@ format_status(_Opt, Status) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+%%--------------------------------------------------------------------
+%% @private
+%% @doc
+%% Функция создания подключения к брокеру
+%% @end
+%%--------------------------------------------------------------------
+make_connection(WSName, AMQPParams)->
+    AmqpParam = lists:nth(rand:uniform(length(AMQPParams)), AMQPParams),
+    ConnName = get_connection_name(WSName),
+    case amqp_connection:start(AmqpParam, ConnName) of
+	{ok, Conn} ->
+	    link(Conn),
+	    Conn;
+	{error, Reason} ->
+	    throw({error, {connection_not_started, Reason}, WSName})
+    end.
+
+%%--------------------------------------------------------------------
+%% @private
+%% @doc
+%% Функция закрытия подключения
+%% @end
+%%--------------------------------------------------------------------
+connection_close(Connection)->
+    amqp_connection:close(Connection),
+    ok.
+
+%%--------------------------------------------------------------------
+%% @private
+%% @doc
+%% Функция функция формирования имени подключения на основании
+%% WebShovel Name
+%% @end
+%%--------------------------------------------------------------------
+get_connection_name(WebShovelName) when is_atom(WebShovelName) ->
+    Prefix = <<"WebShovel ">>,
+    WebShovelNameAsBinary = atom_to_binary(WebShovelName, utf8),
+    <<Prefix/binary, WebShovelNameAsBinary/binary>>;
+%% for dynamic shovels, name is a binary
+get_connection_name(WebShovelName) when is_binary(WebShovelName) ->
+    Prefix = <<"WebShovel ">>,
+    <<Prefix/binary, WebShovelName/binary>>;
+%% fallback
+get_connection_name(_) ->
+    <<"WebShovel">>.

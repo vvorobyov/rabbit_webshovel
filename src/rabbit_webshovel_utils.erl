@@ -70,7 +70,7 @@ parse_source(SrcConfig) ->
 					   ?DEFAULT_RECONNECT_DELAY)),
     #{protocol => Protocol,
       amqp_params => AMQPParams,
-      reconect_delay => ReconnectDelay}.
+      reconnect_delay => ReconnectDelay}.
 
 parse_destinations(DestConfig) ->
     Fun = fun({Name,Config}, Acc)->
@@ -134,7 +134,7 @@ validate_parameter(Param, Fun, Value) ->
             throw({error,{invalid_parameter_value, Param, Err}})
     end.
 
-valid_non_negative_integer(V) when is_integer(V) andalso V>0 ->
+valid_non_negative_integer(V) when is_integer(V) andalso V >= 0 ->
     V;
 valid_non_negative_integer(V) ->
     throw({error, {require_non_negative_integer, V}}).
