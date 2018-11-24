@@ -56,7 +56,7 @@ init(Config0 = #{name := Name,
 		 config := Config}) ->
     SupFlags = {rest_for_one, 1, 5},
     WSConfig = Config0#{supervisor => self()},
-    Worker = {Name,
+    Worker = {{connection,Name},
     	      {rabbit_webshovel_connection_worker, start_link, [WSConfig]},
 	      case Config of
 		  #{reconnect_delay := N}

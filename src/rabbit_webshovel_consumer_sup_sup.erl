@@ -8,10 +8,10 @@
 %%%-------------------------------------------------------------------
 -module(rabbit_webshovel_consumer_sup_sup).
 
--behaviour(supervisor).
+-behaviour(supervisor2).
 
 %% API
--export([start_link/0]).
+-export([start_link/1]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -27,13 +27,13 @@
 %% Starts the supervisor
 %% @end
 %%--------------------------------------------------------------------
--spec start_link() -> {ok, Pid :: pid()} |
+-spec start_link(Args :: map()) -> {ok, Pid :: pid()} |
 		      {error, {already_started, Pid :: pid()}} |
 		      {error, {shutdown, term()}} |
 		      {error, term()} |
 		      ignore.
-start_link() ->
-    supervisor:start_link({local, ?SERVER}, ?MODULE, []).
+start_link(Args) ->
+    supervisor:start_link(?MODULE, Args).
 
 %%%===================================================================
 %%% Supervisor callbacks
@@ -52,20 +52,24 @@ start_link() ->
 		  {ok, {SupFlags :: supervisor:sup_flags(),
 			[ChildSpec :: supervisor:child_spec()]}} |
 		  ignore.
-init([]) ->
+init(_Args = #{name := Name, connection := Connection, config := Config}) ->
+    io:format("~n==================================================~n"
+    	      "WebShovel Name : ~p~n"
+    	      "Cunsumer sup_sup PID: ~p~n"
+    	      "Connection PID ~p~n"
+    	      "Config ~p~n"
+    	      "~n==================================================~n",
+    	      [Name,self(), Connection, Config]),
+    SupFlags = {one_for_one, 1, 5},
 
-    SupFlags = #{strategy => one_for_one,
-		 intensity => 1,
-		 period => 5},
+    %% AChild = #{id => 'AName',
+    %% 	       start => {'AModule', start_link, []},
+    %% 	       restart => permanent,
+    %% 	       shutdown => 5000,
+    %% 	       type => worker,
+    %% 	       modules => ['AModule']},
 
-    AChild = #{id => 'AName',
-	       start => {'AModule', start_link, []},
-	       restart => permanent,
-	       shutdown => 5000,
-	       type => worker,
-	       modules => ['AModule']},
-
-    {ok, {SupFlags, [AChild]}}.
+    {ok, {SupFlags, []}}.
 
 %%%===================================================================
 %%% Internal functions
