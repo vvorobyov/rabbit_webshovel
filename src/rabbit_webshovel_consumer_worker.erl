@@ -20,7 +20,7 @@
 
 -define(SERVER, ?MODULE).
 
--record(state, {}).
+-record(state, {connection}).
 
 %%%===================================================================
 %%% API
@@ -65,11 +65,11 @@ init(Args) ->
 %%--------------------------------------------------------------------
 
 handle_continue(Args = #{supervisor := MainSup}, not_init) ->
-    SupChild = supervisor:which_children(MainSup),
+    Connection = get_connection(MainSup),
     io:format("~nComsumer started with Args = ~p~n"
-	      "Main sup children ~p~n",
-	      [Args,SupChild]),
-    {noreply, #state{}};    
+	      "Connection Pid ~p~n",
+	      [Args,Connection]),
+    {noreply, #state{connection = Connection}};    
 handle_continue(_Request, State) ->
     {noreply, State}.
 
@@ -163,3 +163,8 @@ format_status(_Opt, Status) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+get_connection(Supervisor)->
+    Childrens = supervisor:which_children(Supervisor),
+    {_, ConnPid, worker, [ConnMod]} =lists:keyfind(worker,3, Childrens),
+    
+    ConnMod:get_connection(ConnPid).
