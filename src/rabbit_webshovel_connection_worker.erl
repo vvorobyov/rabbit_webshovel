@@ -8,18 +8,20 @@
 %%%-------------------------------------------------------------------
 -module(rabbit_webshovel_connection_worker).
 
--behaviour(gen_server2).
+-behaviour(gen_server).
 
 %% API
--export([start_link/1]).
+-export([start_link/2]).
 -export([get_connection/1]).
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-	 terminate/2, code_change/3, format_status/2]).
+	 handle_continue/2, terminate/2, code_change/3, format_status/2]).
 
 -define(SERVER, ?MODULE).
 
 -record(state, {name,
+		supervisor,
+		consumerssup,
 		connection}).
 
 %%%===================================================================
@@ -32,8 +34,8 @@ get_connection(Pid) ->
 %% Starts the server
 %% @end
 %%--------------------------------------------------------------------
-start_link(Args) ->
-    gen_server2:start_link(?MODULE, Args, []).
+start_link(Supervisor, Config) ->
+    gen_server:start_link(?MODULE, [Supervisor, Config], []).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -45,13 +47,21 @@ start_link(Args) ->
 %% Initializes the server
 %% @end
 %%--------------------------------------------------------------------
-init(#{name := Name, 
-       config := #{amqp_params := AMQPParams}}) ->
+init([Supervisor,
+     #{name := Name, 
+       source := #{amqp_params := AMQPParams},
+       destinations:=DestConfig}]) ->
     process_flag(trap_exit, true),
     rand:seed(exs64, erlang:timestamp()),
     Connection = make_connection(Name, AMQPParams),
-    {ok, #state{name = Name, 
-		connection = Connection}}.
+    {ok, #state{name=Name, 
+		supervisor=Supervisor,
+		connection=Connection},
+     {continue, DestConfig}};
+init(Conf) ->
+    io:format("~p",[Conf]).
+    
+
 
 %%--------------------------------------------------------------------
 %% @private
@@ -76,6 +86,27 @@ handle_call(_Request, _From, State) ->
     Reply = {error, error_request},
     {reply, Reply, State}.
 
+
+%%--------------------------------------------------------------------
+%% @private
+%% @doc
+%% Handling continue
+%% @end
+%%--------------------------------------------------------------------
+handle_continue(DstConfig,S=#state{consumerssup=undefined})->
+    CunsSSupSpec = {consumers,
+		    {rabbit_webshovel_consumer_sup_sup,
+		     start_link, [S#state.name,
+				  S#state.connection,
+				  DstConfig]},
+		    permanent, 
+		    16#ffffffff,
+		    supervisor,
+		    [rabbit_webshovel_consumer_sup_sup]},
+
+    {ok, Pid} = supervisor2:start_child(S#state.supervisor, CunsSSupSpec),
+
+    {noreply, S#state{consumerssup=Pid}}.
 %%--------------------------------------------------------------------
 %% @private
 %% @doc

@@ -8,20 +8,19 @@
 %%%-------------------------------------------------------------------
 -module(rabbit_webshovel_consumer_worker).
 
--behaviour(gen_server).
+-behaviour(gen_server2).
 
 %% API
--export([start_link/1]).
+-export([start_link/3]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-	 handle_continue/2,
 	 terminate/2, code_change/3, format_status/2]).
 
 -define(SERVER, ?MODULE).
 
 -include_lib("amqp_client/include/amqp_client.hrl").
--record(state, {connection, consume_channel}).
+-record(state, {ws_name, connection, consume_channel}).
 
 %%%===================================================================
 %%% API
@@ -32,12 +31,12 @@
 %% Starts the server
 %% @end
 %%--------------------------------------------------------------------
--spec start_link(Args :: map()) -> {ok, Pid :: pid()} |
-		      {error, Error :: {already_started, pid()}} |
-		      {error, Error :: term()} |
-		      ignore.
-start_link(Args) ->
-    gen_server:start_link(?MODULE, Args, []).
+%% -spec start_link(Args :: map()) -> {ok, Pid :: pid()} |
+%% 		      {error, Error :: {already_started, pid()}} |
+%% 		      {error, Error :: term()} |
+%% 		      ignore.
+start_link(WSName, Connection,Config) ->
+    gen_server2:start_link(?MODULE, [WSName, Connection,Config], []).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -49,33 +48,19 @@ start_link(Args) ->
 %% Initializes the server
 %% @end
 %%--------------------------------------------------------------------
--spec init(Args :: term()) -> {ok, State :: term()} |
-			      {ok, State :: term(), Timeout :: timeout()} |
-			      {ok, State :: term(), hibernate} |
-			      {stop, Reason :: term()} |
-			      ignore.
-init(Args) ->
+%% -spec init(Args :: term()) -> {ok, State :: term()} |
+%% 			      {ok, State :: term(), Timeout :: timeout()} |
+%% 			      {ok, State :: term(), hibernate} |
+%% 			      {stop, Reason :: term()} |
+%% 			      ignore.
+init([WSName, Connection,Config]) ->
     process_flag(trap_exit, true),
-    {ok, not_init, {continue, Args}}.
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Handling continue messages
-%% @end
-%%--------------------------------------------------------------------
-
-handle_continue(Args = #{supervisor := MainSup, config := ConsConf}, not_init) ->
-    Connection = get_connection(MainSup),
     Channel = make_channel(Connection),
-    consume(Channel, ConsConf),
-    io:format("~nComsumer started with Args = ~p~n"
-	      "Connection Pid ~p~n",
-	      [Args,Connection]),
-    {noreply, #state{connection = Connection,
-		     consume_channel = Channel}};    
-handle_continue(_Request, State) ->
-    {noreply, State}.
+    io:format("~n~p~n",[Config]),
+    consume(Channel, Config),
+    {ok, #state{ws_name = WSName, connection=Connection,
+		consume_channel=Channel}}.
+
 
 %%--------------------------------------------------------------------
 %% @private
@@ -167,18 +152,12 @@ format_status(_Opt, Status) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-get_connection(Supervisor)->
-    Childrens = supervisor:which_children(Supervisor),
-    {_, ConnPid, worker, [ConnMod]} =lists:keyfind(worker,3, Childrens),
-    
-    ConnMod:get_connection(ConnPid).
-
 make_channel(Connection)->
     {ok, Ch} = amqp_connection:open_channel(Connection),
     link(Ch),
     Ch.
 
-consume(Channel, #{queue:=Queue, prefetch_count :=PrefCount})->
+consume(Channel, #{config :=#{queue:=Queue, prefetch_count :=PrefCount}})->
     amqp_channel:call(Channel,
 		      #'basic.qos'{prefetch_count = PrefCount}),
     amqp_channel:subscribe(Channel, 

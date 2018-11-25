@@ -11,7 +11,7 @@
 -behaviour(supervisor2).
 
 %% API
--export([start_link/1]).
+-export([start_link/3]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -27,13 +27,8 @@
 %% Starts the supervisor
 %% @end
 %%--------------------------------------------------------------------
--spec start_link(Args :: map()) -> {ok, Pid :: pid()} |
-		      {error, {already_started, Pid :: pid()}} |
-		      {error, {shutdown, term()}} |
-		      {error, term()} |
-		      ignore.
-start_link(Args) ->
-    supervisor:start_link(?MODULE, Args).
+start_link(WSName, Connection, Config) ->
+    supervisor:start_link(?MODULE, [WSName, Connection, Config]).
 
 %%%===================================================================
 %%% Supervisor callbacks
@@ -55,16 +50,18 @@ start_link(Args) ->
 init(Config) ->
     SupFlags = {one_for_one, 1, 5},
     ChildSpecs = make_child_specs(Config),
+    io:format("~n~p~n",[ChildSpecs]),
     {ok, {SupFlags, ChildSpecs}}.
 
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-make_child_specs(#{name := WSName, supervisor :=Supervisor, config :=Config})->
-    Fun = fun(DstConfig0 = #{name :=Name}, AccIn) ->
-		  DstConfig = DstConfig0#{ws_name => WSName, supervisor => Supervisor},
-		  ChildSpec =  { Name,
-				 {rabbit_webshovel_consumer_sup, start_link, [DstConfig]},
+make_child_specs([WSName, Connection, Config])->
+    Fun = fun(DstConfig = #{name :=Name}, AccIn) ->
+		  ChildSpec =  {Name,
+				 {rabbit_webshovel_consumer_sup,
+				  start_link, 
+				  [WSName, Connection,DstConfig]},
 				 permanent,
 				 16#ffffffff,
 				 supervisor,
