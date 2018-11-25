@@ -20,7 +20,8 @@
 
 -define(SERVER, ?MODULE).
 
--record(state, {connection}).
+-include_lib("amqp_client/include/amqp_client.hrl").
+-record(state, {connection, consume_channel}).
 
 %%%===================================================================
 %%% API
@@ -64,12 +65,15 @@ init(Args) ->
 %% @end
 %%--------------------------------------------------------------------
 
-handle_continue(Args = #{supervisor := MainSup}, not_init) ->
+handle_continue(Args = #{supervisor := MainSup, config := ConsConf}, not_init) ->
     Connection = get_connection(MainSup),
+    Channel = make_channel(Connection),
+    consume(Channel, ConsConf),
     io:format("~nComsumer started with Args = ~p~n"
 	      "Connection Pid ~p~n",
 	      [Args,Connection]),
-    {noreply, #state{connection = Connection}};    
+    {noreply, #state{connection = Connection,
+		     consume_channel = Channel}};    
 handle_continue(_Request, State) ->
     {noreply, State}.
 
@@ -168,3 +172,15 @@ get_connection(Supervisor)->
     {_, ConnPid, worker, [ConnMod]} =lists:keyfind(worker,3, Childrens),
     
     ConnMod:get_connection(ConnPid).
+
+make_channel(Connection)->
+    {ok, Ch} = amqp_connection:open_channel(Connection),
+    link(Ch),
+    Ch.
+
+consume(Channel, #{queue:=Queue, prefetch_count :=PrefCount})->
+    amqp_channel:call(Channel,
+		      #'basic.qos'{prefetch_count = PrefCount}),
+    amqp_channel:subscribe(Channel, 
+    			   #'basic.consume'{queue = Queue}, self()).
+    

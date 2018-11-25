@@ -72,6 +72,7 @@ init(#{name := Name,
 handle_call(get_connection, _From, S=#state{}) ->
     {reply, S#state.connection, S};
 handle_call(_Request, _From, State) ->
+    io:format("~nUnknown call:  ~p~nState: ~p~n", [_Request, State]),
     Reply = {error, error_request},
     {reply, Reply, State}.
 
@@ -87,6 +88,7 @@ handle_call(_Request, _From, State) ->
 			 {noreply, NewState :: term(), hibernate} |
 			 {stop, Reason :: term(), NewState :: term()}.
 handle_cast(_Request, State) ->
+    io:format("~nUnknown cast:  ~p~nState: ~p~n", [_Request, State]),
     {noreply, State}.
 
 %%--------------------------------------------------------------------
@@ -101,6 +103,7 @@ handle_info({'EXIT', Conn, Reason}, S=#state{connection = Conn}) ->
     {stop, Reason, S};
 %% Обработка прочих сообщений
 handle_info(_Info, State) ->
+    io:format("~nUnknown info:  ~p~nState: ~p~n", [_Info, State]),
     {noreply, State}.
 
 %%--------------------------------------------------------------------
@@ -117,6 +120,7 @@ handle_info(_Info, State) ->
 terminate({shutdown, {server_initiated_close, _, _}}, _State)->
     ok;
 terminate(_Reason, S) ->
+    io:format("~nTerminate whit reson:  ~p~nState: ~p~n", [_Reason, S]),
     connection_close(S#state.connection),
     ok.
 
