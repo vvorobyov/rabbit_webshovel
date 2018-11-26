@@ -21,7 +21,8 @@
 
 -record(state, {name,
 		supervisor,
-		consumerssup,
+		cons_ref,
+		cons_config,
 		connection}).
 
 %%%===================================================================
@@ -56,11 +57,9 @@ init([Supervisor,
     Connection = make_connection(Name, AMQPParams),
     {ok, #state{name=Name, 
 		supervisor=Supervisor,
-		connection=Connection},
-     {continue, DestConfig}};
-init(Conf) ->
-    io:format("~p",[Conf]).
-    
+		connection=Connection,
+	        cons_config = DestConfig},
+     {continue, start_consumers_sup_sup}}.    
 
 
 %%--------------------------------------------------------------------
@@ -93,20 +92,9 @@ handle_call(_Request, _From, State) ->
 %% Handling continue
 %% @end
 %%--------------------------------------------------------------------
-handle_continue(DstConfig,S=#state{consumerssup=undefined})->
-    CunsSSupSpec = {consumers,
-		    {rabbit_webshovel_consumer_sup_sup,
-		     start_link, [S#state.name,
-				  S#state.connection,
-				  DstConfig]},
-		    permanent, 
-		    16#ffffffff,
-		    supervisor,
-		    [rabbit_webshovel_consumer_sup_sup]},
-
-    {ok, Pid} = supervisor2:start_child(S#state.supervisor, CunsSSupSpec),
-
-    {noreply, S#state{consumerssup=Pid}}.
+handle_continue(start_consumers_sup_sup, S=#state{})->
+    Ref = start_consumers_sup_sup(S),
+    {noreply, S#state{cons_ref=Ref}}.
 %%--------------------------------------------------------------------
 %% @private
 %% @doc
@@ -129,6 +117,10 @@ handle_cast(_Request, State) ->
 %% @end
 %%--------------------------------------------------------------------
 
+%% Сообщение о завершении процесса супервизора consumers
+handle_info({'DOWN',Ref,process, _Pid, _}, S=#state{cons_ref=Ref})->
+    {noreply, S, {continue, start_consumers_sup_sup}};
+    
 %% Сообщение о завершении процесса подключения
 handle_info({'EXIT', Conn, Reason}, S=#state{connection = Conn}) ->
     {stop, Reason, S};
@@ -237,5 +229,16 @@ get_connection_name(_) ->
 %% Функция генерации спецификации для ConsumerSupSupervisor
 %% @end
 %%--------------------------------------------------------------------
-%% make_consumer_supsup_spec()->
-%%     ok.
+start_consumers_sup_sup(S=#state{})->
+    CunsSSupSpec = {consumers,
+		    {rabbit_webshovel_consumer_sup_sup,
+		     start_link, [S#state.name,
+				  S#state.connection,
+				  S#state.cons_config]},
+		    temporary, 
+		    16#ffffffff,
+		    supervisor,
+		    [rabbit_webshovel_consumer_sup_sup]},
+    
+    {ok, Pid} = supervisor2:start_child(S#state.supervisor, CunsSSupSpec),
+    erlang:monitor(Pid).
