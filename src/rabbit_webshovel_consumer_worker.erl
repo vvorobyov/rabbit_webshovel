@@ -11,7 +11,7 @@
 -behaviour(gen_server2).
 
 %% API
--export([start_link/3]).
+-export([start_link/4]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -35,8 +35,8 @@
 %% 		      {error, Error :: {already_started, pid()}} |
 %% 		      {error, Error :: term()} |
 %% 		      ignore.
-start_link(WSName, Connection,Config) ->
-    gen_server2:start_link(?MODULE, [WSName, Connection,Config], []).
+start_link(WSName, Connection, Supervisor, Config) ->
+    gen_server2:start_link(?MODULE, [WSName, Connection, Supervisor, Config], []).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -53,7 +53,7 @@ start_link(WSName, Connection,Config) ->
 %% 			      {ok, State :: term(), hibernate} |
 %% 			      {stop, Reason :: term()} |
 %% 			      ignore.
-init([WSName, Connection, 
+init([WSName, Connection, Supervisor,
       #{name:=Name, 
 	config := #{queue := Queue,
 		    prefetch_count := PrefCount,
@@ -63,6 +63,7 @@ init([WSName, Connection,
     consume(Channel, Queue, PrefCount, AckMode),
     {ok, #{ws_name => WSName, 
 	   name => Name,
+	   supervisor => Supervisor,
 	   connection => Connection,
 	   consume_channel => Channel,
 	   queue => Queue,
@@ -167,10 +168,13 @@ handle_info(_Info,
 %%--------------------------------------------------------------------
 terminate({close_channel, _Reason}, _State)->
     ok;
+terminate(Reason, State) 
+  when Reason =:= shutdown; Reason =:= killed ->
+    close_channels(State),
+    ok;
 terminate(_Reason, 
 	    State = #{ws_name := WSName,
-		      name := Name,
-		      consume_channel := Channel}) ->
+		      name := Name}) ->
     io:format("~n====================================================~n"
 	      "Module: ~p~n"
 	      "Pid:~p~n"
@@ -181,7 +185,7 @@ terminate(_Reason,
 	      "~nUnknown terminate reason: ~p~n"
 	      "====================================================~n",
 	      [?MODULE, self(), WSName, Name, State, _Reason]),
-    amqp_channel:close(Channel),
+    close_channels(State),
     ok.
 
 %%--------------------------------------------------------------------
@@ -219,4 +223,7 @@ consume(Channel,Queue, PrefCount, AckMode)->
     			   #'basic.consume'{queue = Queue, 
 					    no_ack= AckMode=:=no_ack},
 			   self()).
+    
+close_channels(#{consume_channel :=Channel}) ->
+    amqp_channel:close(Channel).
     

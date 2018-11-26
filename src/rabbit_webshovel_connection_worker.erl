@@ -56,7 +56,6 @@ init([Supervisor,
     process_flag(trap_exit, true),
     rand:seed(exs64, erlang:timestamp()),
     Connection = make_connection(Name, AMQPParams),
-    io:format("~n Connection PID: ~p~n",[Connection]),
     {ok, #{name => Name, 
 	   supervisor => Supervisor,
 	   connection => Connection,
@@ -133,10 +132,8 @@ handle_cast(_Request, State=#{name := Name}) ->
 
 %% Сообщение о завершении процесса супервизора consumers
 handle_info({'DOWN', Ref,process, _Pid, shutdown}, State=#{cons_ref := Ref})->
-    io:format("~n~nCons_sup_sup terminate with reason: shutdown~n~n"),
     {noreply, State};
-handle_info({'DOWN',Ref,process, _Pid, Reason}, State=#{cons_ref := Ref})->
-    io:format("~n~nCons_sup_sup terminate with reason: ~p~n~n", [Reason] ),
+handle_info({'DOWN',Ref,process, _Pid, _Reason}, State=#{cons_ref := Ref})->
     {noreply, State, {continue, start_consumers_sup_sup}};
 %% Сообщение о завершении процесса подключения
 handle_info({'EXIT', Conn, Reason}, State=#{connection := Conn}) ->
@@ -175,6 +172,10 @@ terminate({connection_close, Reason}, State=#{name := Name}) ->
 	      "====================================================~n",
 	      [?MODULE, self(), Name, State, Reason]),
     ok;
+terminate(Reason,#{connection := Connection}) when
+      Reason =:= shutdown; Reason =:= killed ->
+    connection_close(Connection),
+    ok;    
 terminate(_Reason, State=#{name := Name, connection := Connection}) ->
     io:format("~n====================================================~n"
 	      "Module: ~p~n"
@@ -218,15 +219,20 @@ format_status(_Opt, Status) ->
 %% Функция создания подключения к брокеру
 %% @end
 %%--------------------------------------------------------------------
-make_connection(WSName, AMQPParams)->
-    AmqpParam = lists:nth(rand:uniform(length(AMQPParams)), AMQPParams),
+make_connection(WSName,[])->
+    throw({error, 
+	   {connection_not_started, read_log_for_reason}, WSName});
+make_connection(WSName, [AmqpParam|Rest])->
     ConnName = get_connection_name(WSName),
     case amqp_connection:start(AmqpParam, ConnName) of
 	{ok, Conn} ->
 	    link(Conn),
+	    io:format("~n!!! Connected.Connection PID: ~p~n",[Conn]),
 	    Conn;
 	{error, Reason} ->
-	    throw({error, {connection_not_started, Reason}, WSName})
+	    io:format("~n!!! Error start connection with reason:~p~n", 
+		      [Reason]),
+	    make_connection(WSName, Rest)
     end.
 
 %%--------------------------------------------------------------------

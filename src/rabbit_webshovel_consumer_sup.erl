@@ -58,7 +58,7 @@ init([WSName, Connection, Config = #{name := Name}]) ->
     ConsumerSpec = {Name,
 		    {rabbit_webshovel_consumer_worker, 
 		     start_link, 
-		     [WSName, Connection,Config]},
+		     [WSName, Connection,self(),Config]},
 		    permanent,
 		    5000,
 		    worker,

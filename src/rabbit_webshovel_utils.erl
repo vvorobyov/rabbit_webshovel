@@ -62,7 +62,7 @@ parse_source(SrcConfig) ->
 		    throw({invalid_source_uri, {URI, Reason}})
             end
           end,
-    AMQPParams = lists:foldl(Fun, [], URIs),
+    AMQPParams = lists:reverse(lists:foldl(Fun, [], URIs)),
     ReconnectDelay = validate_parameter(
 		       reconnect_delay,
 		       fun valid_non_negative_integer/1,
