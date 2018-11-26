@@ -20,7 +20,7 @@
 -define(SERVER, ?MODULE).
 
 -include_lib("amqp_client/include/amqp_client.hrl").
--record(state, {ws_name, connection, consume_channel}).
+%% -record(state, {ws_name, name, connection, consume_channel}).
 
 %%%===================================================================
 %%% API
@@ -53,13 +53,21 @@ start_link(WSName, Connection,Config) ->
 %% 			      {ok, State :: term(), hibernate} |
 %% 			      {stop, Reason :: term()} |
 %% 			      ignore.
-init([WSName, Connection,Config]) ->
+init([WSName, Connection, 
+      #{name:=Name, 
+	config := #{queue := Queue,
+		    prefetch_count := PrefCount,
+		    ack_mode := AckMode}}]) ->
     process_flag(trap_exit, true),
     Channel = make_channel(Connection),
-    io:format("~n~p~n",[Config]),
-    consume(Channel, Config),
-    {ok, #state{ws_name = WSName, connection=Connection,
-		consume_channel=Channel}}.
+    consume(Channel, Queue, PrefCount, AckMode),
+    {ok, #{ws_name => WSName, 
+	   name => Name,
+	   connection => Connection,
+	   consume_channel => Channel,
+	   queue => Queue,
+	   prefetch_count => PrefCount,
+	   ack_mode => AckMode}}.
 
 
 %%--------------------------------------------------------------------
@@ -68,16 +76,19 @@ init([WSName, Connection,Config]) ->
 %% Handling call messages
 %% @end
 %%--------------------------------------------------------------------
--spec handle_call(Request :: term(), From :: {pid(), term()}, State :: term()) ->
-			 {reply, Reply :: term(), NewState :: term()} |
-			 {reply, Reply :: term(), NewState :: term(), Timeout :: timeout()} |
-			 {reply, Reply :: term(), NewState :: term(), hibernate} |
-			 {noreply, NewState :: term()} |
-			 {noreply, NewState :: term(), Timeout :: timeout()} |
-			 {noreply, NewState :: term(), hibernate} |
-			 {stop, Reason :: term(), Reply :: term(), NewState :: term()} |
-			 {stop, Reason :: term(), NewState :: term()}.
-handle_call(_Request, _From, State) ->
+handle_call(_Request, _From, 
+	    State = #{ws_name := WSName,
+		      name := Name}) ->
+    io:format("~n====================================================~n"
+	      "Module: ~p~n"
+	      "Pid:~p~n"
+	      "WebShovel Name: ~p~n"
+	      "Dest Name: ~p~n"
+	      "State: ~p~n"
+	      "----------------------------------------------------~n"
+	      "~nUnknown call: ~p~n"
+	      "====================================================~n",
+	      [?MODULE, self(), WSName, Name, State, _Request]),
     Reply = ok,
     {reply, Reply, State}.
 
@@ -87,12 +98,19 @@ handle_call(_Request, _From, State) ->
 %% Handling cast messages
 %% @end
 %%--------------------------------------------------------------------
--spec handle_cast(Request :: term(), State :: term()) ->
-			 {noreply, NewState :: term()} |
-			 {noreply, NewState :: term(), Timeout :: timeout()} |
-			 {noreply, NewState :: term(), hibernate} |
-			 {stop, Reason :: term(), NewState :: term()}.
-handle_cast(_Request, State) ->
+handle_cast(_Request,
+	    State = #{ws_name := WSName,
+		      name := Name}) ->
+    io:format("~n====================================================~n"
+	      "Module: ~p~n"
+	      "Pid:~p~n"
+	      "WebShovel Name: ~p~n"
+	      "Dest Name: ~p~n"
+	      "State: ~p~n"
+	      "----------------------------------------------------~n"
+	      "~nUnknown cast: ~p~n"
+	      "====================================================~n",
+	      [?MODULE, self(), WSName, Name, State, _Request]),
     {noreply, State}.
 
 %%--------------------------------------------------------------------
@@ -101,12 +119,41 @@ handle_cast(_Request, State) ->
 %% Handling all non call/cast messages
 %% @end
 %%--------------------------------------------------------------------
--spec handle_info(Info :: timeout() | term(), State :: term()) ->
-			 {noreply, NewState :: term()} |
-			 {noreply, NewState :: term(), Timeout :: timeout()} |
-			 {noreply, NewState :: term(), hibernate} |
-			 {stop, Reason :: normal | term(), NewState :: term()}.
-handle_info(_Info, State) ->
+%% Получено сообщение о завершении процесса канала подписки
+handle_info({'EXIT', Channel, Reason}, #{consume_channel := Channel})->
+    {stop, {close_channel, Reason}};
+%% Получено сообщение об успешности подписки
+handle_info(#'basic.consume_ok'{consumer_tag=ConsTag}, State) ->
+    io:format("~nConsumed. Tag: ~p~n",[ConsTag]),
+    {noreply, State#{consumer_tag => ConsTag}};
+%% Получено сообщение от брокера
+handle_info(Msg = {#'basic.deliver'{consumer_tag = ConsTag},
+		   #amqp_msg{payload = Payload}}, 
+	    State = #{ws_name :=WSName, 
+		      name :=Name, 
+		      consumer_tag := ConsTag}) ->
+    io:format("~n===================================================~n"
+	      "WebShovel Name: ~p~n"
+	      "Dest Name: ~p~n"
+	      "---------------------------------------------------~n"
+	      "Receive message: ~p~n"
+	      "All msg: ~p~n"
+	      "===================================================~n",
+	      [WSName, Name, Payload, Msg]),
+    {noreply, State};
+handle_info(_Info,
+	    State = #{ws_name := WSName,
+		      name := Name}) ->
+    io:format("~n====================================================~n"
+	      "Module: ~p~n"
+	      "Pid:~p~n"
+	      "WebShovel Name: ~p~n"
+	      "Dest Name: ~p~n"
+	      "State: ~p~n"
+	      "----------------------------------------------------~n"
+	      "~nUnknown info: ~p~n"
+	      "====================================================~n",
+	      [?MODULE, self(), WSName, Name, State, _Info]),
     {noreply, State}.
 
 %%--------------------------------------------------------------------
@@ -118,9 +165,23 @@ handle_info(_Info, State) ->
 %% with Reason. The return value is ignored.
 %% @end
 %%--------------------------------------------------------------------
--spec terminate(Reason :: normal | shutdown | {shutdown, term()} | term(),
-		State :: term()) -> any().
-terminate(_Reason, _State) ->
+terminate({close_channel, _Reason}, _State)->
+    ok;
+terminate(_Reason, 
+	    State = #{ws_name := WSName,
+		      name := Name,
+		      consume_channel := Channel}) ->
+    io:format("~n====================================================~n"
+	      "Module: ~p~n"
+	      "Pid:~p~n"
+	      "WebShovel Name: ~p~n"
+	      "Dest Name: ~p~n"
+	      "State: ~p~n"
+	      "----------------------------------------------------~n"
+	      "~nUnknown terminate reason: ~p~n"
+	      "====================================================~n",
+	      [?MODULE, self(), WSName, Name, State, _Reason]),
+    amqp_channel:close(Channel),
     ok.
 
 %%--------------------------------------------------------------------
@@ -129,10 +190,6 @@ terminate(_Reason, _State) ->
 %% Convert process state when code is changed
 %% @end
 %%--------------------------------------------------------------------
--spec code_change(OldVsn :: term() | {down, term()},
-		  State :: term(),
-		  Extra :: term()) -> {ok, NewState :: term()} |
-				      {error, Reason :: term()}.
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
@@ -144,8 +201,6 @@ code_change(_OldVsn, State, _Extra) ->
 %% or when it appears in termination error logs.
 %% @end
 %%--------------------------------------------------------------------
--spec format_status(Opt :: normal | terminate,
-		    Status :: list()) -> Status :: term().
 format_status(_Opt, Status) ->
     Status.
 
@@ -157,9 +212,11 @@ make_channel(Connection)->
     link(Ch),
     Ch.
 
-consume(Channel, #{config :=#{queue:=Queue, prefetch_count :=PrefCount}})->
+consume(Channel,Queue, PrefCount, AckMode)->
     amqp_channel:call(Channel,
 		      #'basic.qos'{prefetch_count = PrefCount}),
     amqp_channel:subscribe(Channel, 
-    			   #'basic.consume'{queue = Queue}, self()).
+    			   #'basic.consume'{queue = Queue, 
+					    no_ack= AckMode=:=no_ack},
+			   self()).
     

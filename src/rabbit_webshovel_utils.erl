@@ -92,9 +92,17 @@ parse_destination(Name, Config)->
 		      proplists:get_value(prefetch_count, 
 					  Config, 
 					  ?DEFAULT_PREFETCH_COUNT)),
+    AckMode = validate_parameter(
+		ack_mode,
+		fun validate_allowed_value/1,
+		{proplists:get_value(ack_mode,
+				     Config,
+				     on_confirm),
+		 ?ACKMODE_ALLOWED_VALUES}),
     #{name => Name, 
       config => #{queue => Queue, 
-		 prefetch_count => PrefetchCount}}.
+		  prefetch_count => PrefetchCount,
+		  ack_mode => AckMode}}.
 
 
 %%% ================= Validate function ==============================
@@ -144,3 +152,11 @@ valid_binary(V) when is_binary(V) ->
     V;
 valid_binary(V) ->
     throw({error, {require_binary, V}}).
+
+validate_allowed_value({Value, List}) ->
+    case lists:member(Value, List) of
+	true ->
+	    Value;
+	false ->
+	    throw({error, {waiting_for_one_of,List}})
+    end.

@@ -50,7 +50,6 @@ start_link(WSName, Connection, Config) ->
 init(Config) ->
     SupFlags = {one_for_one, 1, 5},
     ChildSpecs = make_child_specs(Config),
-    io:format("~n~p~n",[ChildSpecs]),
     {ok, {SupFlags, ChildSpecs}}.
 
 %%%===================================================================

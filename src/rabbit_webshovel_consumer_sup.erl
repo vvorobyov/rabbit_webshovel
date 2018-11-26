@@ -55,12 +55,6 @@ start_link(WSName, Connection, Config) ->
 init([WSName, Connection, Config = #{name := Name}]) ->
     
     SupFlags = {rest_for_one, 1, 5},
-    io:format("~n===================================================~n"
-	      "Connection Name ~p~n"
-	      "Consumer Name ~p~n"
-	      "Connection Pid ~p~n"
-	      "Config ~p~n",
-	      [WSName, Name, Connection, Config]),
     ConsumerSpec = {Name,
 		    {rabbit_webshovel_consumer_worker, 
 		     start_link, 
