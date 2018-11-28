@@ -8,17 +8,19 @@
 %%%-------------------------------------------------------------------
 -module(rabbit_webshovel_consumer_worker).
 
--behaviour(gen_server2).
+-behaviour(gen_server).
 
 %% API
 -export([start_link/4]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-	 terminate/2, code_change/3, format_status/2]).
+	 handle_continue/2, terminate/2, code_change/3,
+	 format_status/2]).
 
 -define(SERVER, ?MODULE).
 
+-include("rabbit_webshovel.hrl").
 -include_lib("amqp_client/include/amqp_client.hrl").
 %% -record(state, {ws_name, name, connection, consume_channel}).
 
@@ -36,7 +38,7 @@
 %% 		      {error, Error :: term()} |
 %% 		      ignore.
 start_link(WSName, Connection, Supervisor, Config) ->
-    gen_server2:start_link(?MODULE, [WSName, Connection, Supervisor, Config], []).
+    gen_server:start_link(?MODULE, [WSName, Connection, Supervisor, Config], []).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -54,21 +56,50 @@ start_link(WSName, Connection, Supervisor, Config) ->
 %% 			      {stop, Reason :: term()} |
 %% 			      ignore.
 init([WSName, Connection, Supervisor,
-      #{name:=Name, 
+     Config =  #{name:=Name, 
 	config := #{queue := Queue,
 		    prefetch_count := PrefCount,
-		    ack_mode := AckMode}}]) ->
+		    ack_mode := AckMode,
+		    handle := Handle}}]) ->
     process_flag(trap_exit, true),
-    Channel = make_channel(Connection),
-    consume(Channel, Queue, PrefCount, AckMode),
+    io:format("`nConsumer ~p config:~p~n",[Name, Config]),
+    ConsChannel = make_channel(Connection),
+    PublishChannel = make_channel(Connection),
+    consume(ConsChannel, Queue, PrefCount, AckMode),
     {ok, #{ws_name => WSName, 
 	   name => Name,
 	   supervisor => Supervisor,
 	   connection => Connection,
-	   consume_channel => Channel,
+	   consume_channel => ConsChannel,
+	   publish_channel => PublishChannel,
 	   queue => Queue,
 	   prefetch_count => PrefCount,
-	   ack_mode => AckMode}}.
+	   ack_mode => AckMode,
+	   handle => Handle},{continue, start_publisher_sup_sup}}.
+
+
+handle_continue(start_publisher_sup_sup, State=#{supervisor := Sup})->
+    io:format("~nContinue start_publisher_sup_sup~n"),
+    PubSSupSpec = {publisher,
+		   {rabbit_webshovel_publisher_sup_sup,
+		    start_link,[]},
+		   temporary,
+		   16#ffffffff,
+		   supervisor,
+		   [rabbit_webshovel_publisher_sup_sup]},
+    {ok, PPid} = supervisor2:start_child(Sup,PubSSupSpec),
+    PRef = erlang:monitor(process, PPid),
+    {noreply, State#{publisher_ss_fer => PRef,
+		     publisher_ss_pid => PPid},{continue,
+						start_publishers_sup}};
+handle_continue(start_publishers_sup,
+		State=#{publisher_ss_pid := _Sup}) ->
+    io:format("~nContinue start_publishers_sup~n"),
+
+    {noreply, State};
+handle_continue(_Request, State) ->
+    io:format("~nContinue any~n"),
+    {noreply, State}.
 
 
 %%--------------------------------------------------------------------
@@ -114,12 +145,22 @@ handle_cast(_Request,
 	      [?MODULE, self(), WSName, Name, State, _Request]),
     {noreply, State}.
 
+%handle_info
 %%--------------------------------------------------------------------
 %% @private
 %% @doc
 %% Handling all non call/cast messages
 %% @end
 %%--------------------------------------------------------------------
+
+%% Сообщение о завершении процесса супервизора consumers
+handle_info({'DOWN', Ref, process, _Pid, shutdown},
+	    State=#{publiser_ss_ref := Ref})->
+    {noreply, State};
+handle_info({'DOWN', Ref, process, _Pid, _Reason},
+	    State=#{publisher_ss_ref := Ref})->
+    {noreply, State, {continue, start_publisher_supervisor_sup_sup}};
+
 %% Получено сообщение о завершении процесса канала подписки
 handle_info({'EXIT', Channel, Reason}, #{consume_channel := Channel})->
     {stop, {close_channel, Reason}};
@@ -132,7 +173,9 @@ handle_info(Msg = {#'basic.deliver'{consumer_tag = ConsTag},
 		   #amqp_msg{payload = Payload}}, 
 	    State = #{ws_name :=WSName, 
 		      name :=Name, 
-		      consumer_tag := ConsTag}) ->
+		      consumer_tag := ConsTag,
+		      handle := Handle
+		     }) ->
     io:format("~n===================================================~n"
 	      "WebShovel Name: ~p~n"
 	      "Dest Name: ~p~n"
@@ -141,6 +184,7 @@ handle_info(Msg = {#'basic.deliver'{consumer_tag = ConsTag},
 	      "All msg: ~p~n"
 	      "===================================================~n",
 	      [WSName, Name, Payload, Msg]),
+    publish(Handle, Msg),
     {noreply, State};
 handle_info(_Info,
 	    State = #{ws_name := WSName,
@@ -211,6 +255,7 @@ format_status(_Opt, Status) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
 make_channel(Connection)->
     {ok, Ch} = amqp_connection:open_channel(Connection),
     link(Ch),
@@ -226,4 +271,32 @@ consume(Channel,Queue, PrefCount, AckMode)->
     
 close_channels(#{consume_channel :=Channel}) ->
     amqp_channel:close(Channel).
-    
+
+%start_http_endpoint_sup(Supervisor)->
+%    ok.
+
+
+publish([],[])->
+    ok;
+publish(Handler = #{protocol := http}, Message) ->
+    publish(Handler = #{protocol => https}, Message);
+publish(_Handler = #{protocol := https, method :=Method, uri := URL},
+	_Message = {_,#amqp_msg{props = #'P_basic'{
+				       content_type = ContentType0
+				      },
+			    payload = Payload}})
+  when (Method =:= post) orelse
+       (Method =:= patch) orelse
+       (Method =:= put) orelse
+       (Method =:= delete) ->
+    ContentType = set_content_type(ContentType0),
+    Request = {URL, [], ContentType, Payload},
+    http_request(Method, Request).
+	    
+http_request(Method, Request) ->
+   httpc:request(Method,Request,[],[{sync, false}]).
+
+set_content_type(undefined) ->
+    ?DEFAULT_CONTENT_TYPE;
+set_content_type(ContentType)  ->
+    binary_to_list(ContentType).

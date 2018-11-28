@@ -86,6 +86,9 @@ parse_destination(Name, Config)->
     Queue = validate_parameter(queue, 
 			       fun valid_binary/1, 
 			       Queue0),
+    {handle, Handle0} = proplists:lookup(handle, Config),
+    validate(Handle0),
+    Handle = parse_handle(Handle0),
     PrefetchCount = validate_parameter(
 		      prefetch_count,
 		      fun valid_non_negative_integer/1,
@@ -102,9 +105,33 @@ parse_destination(Name, Config)->
     #{name => Name, 
       config => #{queue => Queue, 
 		  prefetch_count => PrefetchCount,
-		  ack_mode => AckMode}}.
+		  ack_mode => AckMode,
+		  handle => Handle}}.
 
-
+parse_handle(Config) ->
+    Protocol =  validate_parameter(
+		  protocol,
+		  fun validate_allowed_value/1,
+		  {proplists:get_value(protocol,
+				       Config,
+				       ?DEFAULT_DEST_PROTOCOL),
+		   ?DEST_PROTOCOL_ALLOWED_VALUE}),
+    {uri, URI0} = proplists:lookup(uri, Config),
+    URI = validate_parameter(
+	    uri,
+	    fun validate_dest_uri/1,
+	    URI0),
+    Method = validate_parameter(
+	       method,
+	       fun validate_allowed_value/1,
+	       {proplists:get_value(method,
+				    Config,
+				    ?DEFAULT_HTTP_METHOD),
+		?HTTP_METHOD_ALLOWED_VALUE}),
+    #{protocol => Protocol,
+      uri => URI,
+      method => Method}.
+    
 %%% ================= Validate function ==============================
 
 validate(Config) ->
@@ -152,6 +179,14 @@ valid_binary(V) when is_binary(V) ->
     V;
 valid_binary(V) ->
     throw({error, {require_binary, V}}).
+
+validate_dest_uri(V) ->
+    case http_uri:parse(V) of
+	{ok, _} ->
+	    V;
+	Error ->
+	    throw(Error)
+    end.
 
 validate_allowed_value({Value, List}) ->
     case lists:member(Value, List) of

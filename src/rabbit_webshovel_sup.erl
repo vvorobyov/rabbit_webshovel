@@ -77,7 +77,7 @@ make_child_specs(Configurations)->
 	maps:fold(Fun, [], Configurations).
 
 get_config() ->
-    case catch file:consult("/home/vlad/rabbit_webshovel/include/config") of
+    case catch file:consult("/home/vlad/rabbit_webshovel/include/config.erl") of
 	{ok, [Value]} -> {ok,Value};
 	{error, _}  -> 
 	    io:format("~n!!! Error load config!!!~n"),
@@ -106,3 +106,4 @@ parse_configuration( _Other, _Acc) ->
 
 validate_webshovel_config(WSName, WSConfig) ->
     rabbit_webshovel_utils:parse(WSName, WSConfig).
+
