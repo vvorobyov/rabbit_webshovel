@@ -12,7 +12,6 @@
 
 %% API
 -export([start_link/2]).
--export([get_connection/1]).
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
 	 handle_continue/2, terminate/2, code_change/3, format_status/2]).
@@ -28,26 +27,14 @@
 %%%===================================================================
 %%% API
 %%%===================================================================
-get_connection(Pid) ->
-    gen_server:call(Pid, get_connection).
-%%--------------------------------------------------------------------
-%% @doc
-%% Starts the server
-%% @end
-%%--------------------------------------------------------------------
+
+
 start_link(Supervisor, Config) ->
     gen_server:start_link(?MODULE, [Supervisor, Config], []).
 
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Initializes the server
-%% @end
-%%--------------------------------------------------------------------
 init([Supervisor,
      #{name := Name, 
        source := #{amqp_params := AMQPParams},
@@ -61,16 +48,8 @@ init([Supervisor,
 	   connection => Connection,
 	   cons_config => DestConfig},
      {continue, start_consumers_sup_sup}}.    
-
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Handling call messages
-%% @end
-%%--------------------------------------------------------------------
-handle_call(get_connection, _From, State=#{connection := Connection}) ->
-    {reply, Connection, State};
+%%-----------------------HANDLE CALL-----------------------------------
+%% Не известные зипросы
 handle_call(_Request, _From, State=#{name := Name}) ->
     io:format("~n====================================================~n"
 	      "Module: ~p~n"
@@ -84,15 +63,12 @@ handle_call(_Request, _From, State=#{name := Name}) ->
     Reply = {error, error_request},
     {reply, Reply, State}.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Handling continue
-%% @end
-%%--------------------------------------------------------------------
+%%-----------------------HANDLE CONTINUE-----------------------------------
+%% Запуск consumers_sup_sup
 handle_continue(start_consumers_sup_sup, State)->
     Ref = start_consumers_sup_sup(State),
     {noreply, State#{cons_ref => Ref}};
+%% Не известные запросы продолжения
 handle_continue(_Request, State=#{name := Name}) ->
     io:format("~n====================================================~n"
 	      "Module: ~p~n"
@@ -105,12 +81,8 @@ handle_continue(_Request, State=#{name := Name}) ->
 	      [?MODULE, self(), Name, State, _Request]),
     {noreply, State}.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Handling cast messages
-%% @end
-%%--------------------------------------------------------------------
+%%-----------------------HANDLE CAST-----------------------------------
+%% Неизвестные асинхронные запросы
 handle_cast(_Request, State=#{name := Name}) ->
     io:format("~n====================================================~n"
 	      "Module: ~p~n"
@@ -123,21 +95,24 @@ handle_cast(_Request, State=#{name := Name}) ->
 	      [?MODULE, self(), Name, State, _Request]),
     {noreply, State}.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Handling all non call/cast messages
-%% @end
-%%--------------------------------------------------------------------
 
-%% Сообщение о завершении процесса супервизора consumers
-handle_info({'DOWN', Ref,process, _Pid, shutdown}, State=#{cons_ref := Ref})->
+%%-----------------------HANDLE INFO-----------------------------------
+%% Сообщение о завершении процесса супервизора consumers по
+%% причине sutdown
+handle_info({'DOWN', Ref, process, _Pid, shutdown},
+	    State=#{cons_ref := Ref})->
     {noreply, State};
-handle_info({'DOWN',Ref,process, _Pid, _Reason}, State=#{cons_ref := Ref})->
+
+%% Сообщение о завершении процесса супервизора consumers по
+%% причине ошибки
+handle_info({'DOWN', Ref, process, _Pid, _Reason},
+	    State=#{cons_ref := Ref})->
     {noreply, State, {continue, start_consumers_sup_sup}};
+
 %% Сообщение о завершении процесса подключения
 handle_info({'EXIT', Conn, Reason}, State=#{connection := Conn}) ->
     {stop, {connection_close,Reason}, State};
+
 %% Обработка прочих сообщений
 handle_info(_Info, State=#{name := Name}) ->
     io:format("~n====================================================~n"
@@ -151,61 +126,39 @@ handle_info(_Info, State=#{name := Name}) ->
 	      [?MODULE, self(), Name, State, _Info]),
     {noreply, State}.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% This function is called by a gen_server when it is about to
-%% terminate. It should be the opposite of Module:init/1 and do any
-%% necessary cleaning up. When it returns, the gen_server terminates
-%% with Reason. The return value is ignored.
-%% @end
-%%--------------------------------------------------------------------
-terminate({connection_close, Reason}, State=#{name := Name}) ->
+
+%%-----------------------HANDLE TERMINATE--------------------------------
+%% Завершение работы в связи с закрытием подключения
+terminate({connection_close, Reason},
+	  _State=#{name := Name}) ->
     io:format("~n====================================================~n"
-	      "Module: ~p~n"
-	      "Pid:~p~n"
 	      "WebShovel Name: ~p~n"
-	      "State: ~p~n"
 	      "----------------------------------------------------~n"
 	      "Connection close with reason : ~p~n"
-	      "Terminate connection worker~n"
 	      "====================================================~n",
-	      [?MODULE, self(), Name, State, Reason]),
+	      [ Name, Reason]),
     ok;
-terminate(Reason,#{connection := Connection}) when
-      Reason =:= shutdown; Reason =:= killed ->
+%% Завершение работы иницированное супервизором
+terminate(Reason,
+	  _State = #{connection := Connection})
+  when Reason =:= shutdown; Reason =:= killed ->
     connection_close(Connection),
-    ok;    
-terminate(_Reason, State=#{name := Name, connection := Connection}) ->
+    ok;
+%% Другие причины завершения работы 
+terminate(Reason,
+	  _State=#{name := Name, connection := Connection}) ->
     io:format("~n====================================================~n"
-	      "Module: ~p~n"
-	      "Pid:~p~n"
 	      "WebShovel Name: ~p~n"
-	      "State: ~p~n"
 	      "----------------------------------------------------~n"
-	      "Terminate with reason: ~p~n"
+	      "Terminate webshovel with reason: ~p~n"
 	      "====================================================~n",
-	      [?MODULE, self(), Name, State, _Reason]),
+	      [Name, Reason]),
     connection_close(Connection),
     ok.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Convert process state when code is changed
-%% @end
-%%--------------------------------------------------------------------
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% This function is called for changing the form and appearance
-%% of gen_server status when it is returned from sys:get_status/1,2
-%% or when it appears in termination error logs.
-%% @end
-%%--------------------------------------------------------------------
 format_status(_Opt, Status) ->
     Status.
 
@@ -213,12 +166,7 @@ format_status(_Opt, Status) ->
 %%% Internal functions
 %%%===================================================================
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
 %% Функция создания подключения к брокеру
-%% @end
-%%--------------------------------------------------------------------
 make_connection(WSName,[])->
     throw({error, 
 	   {connection_not_started, read_log_for_reason}, WSName});
@@ -235,23 +183,13 @@ make_connection(WSName, [AmqpParam|Rest])->
 	    make_connection(WSName, Rest)
     end.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
 %% Функция закрытия подключения
-%% @end
-%%--------------------------------------------------------------------
 connection_close(Connection)->
     amqp_connection:close(Connection),
     ok.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
 %% Функция функция формирования имени подключения на основании
 %% WebShovel Name
-%% @end
-%%--------------------------------------------------------------------
 get_connection_name(WebShovelName) when is_atom(WebShovelName) ->
     Prefix = <<"WebShovel ">>,
     WebShovelNameAsBinary = atom_to_binary(WebShovelName, utf8),
@@ -264,12 +202,7 @@ get_connection_name(WebShovelName) when is_binary(WebShovelName) ->
 get_connection_name(_) ->
     <<"WebShovel">>.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
 %% Функция запуска ConsumerSupSupervisor
-%% @end
-%%--------------------------------------------------------------------
 start_consumers_sup_sup(#{name := Name, 
 			  connection := Connection, 
 			  cons_config := Config,

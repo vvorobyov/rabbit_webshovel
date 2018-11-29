@@ -21,28 +21,12 @@
 %%%===================================================================
 %%% API functions
 %%%===================================================================
-
-%%--------------------------------------------------------------------
-%% @doc
-%% Starts the supervisor
-%% @end
-%%--------------------------------------------------------------------
 start_link(WSName, Connection, Config) ->
     supervisor:start_link(?MODULE, [WSName, Connection, Config]).
 
 %%%===================================================================
 %%% Supervisor callbacks
 %%%===================================================================
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Whenever a supervisor is started using supervisor:start_link/[2,3],
-%% this function is called by the new process to find out about
-%% restart strategy, maximum restart intensity, and child
-%% specifications.
-%% @end
-%%--------------------------------------------------------------------
 -spec init(Args :: term()) ->
 		  {ok, {SupFlags :: supervisor:sup_flags(),
 			[ChildSpec :: supervisor:child_spec()]}} |
