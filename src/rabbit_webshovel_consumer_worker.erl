@@ -147,9 +147,22 @@ handle_info(Msg = {#'basic.deliver'{consumer_tag=ConsTag},
     {noreply,
      State#state{
        endpoint_msgs = EndPointMsgs#{Ref => Msg}}};
+%% Обработка сообщений от endpoint
+handle_info({'DOWN', Ref, process, _Pid, {message_published,
+					  Response}},
+	    State = #state{}) ->
+    case catch(maps:get(Ref, State#state.endpoint_msgs)) of
+	{error, _} ->
+	    io:format("~nUndefined endpoint process:~p~nMessage:~p~n",
+		      [_Pid, Response]),
+	    {noreply, State};
+	Value ->
+	    io:format("~nMsg: ~p~nResponse: ~p~n", [Value, Response]),
+	    {noreply, State}
+    end;
 handle_info(_Info,
-	    State = #{ws_name := WSName,
-		      name := Name}) ->
+	    State = #state{ws_name=WSName,
+			   name=Name}) ->
     io:format("~n====================================================~n"
 	      "Module: ~p~n"
 	      "Pid:~p~n"
@@ -170,8 +183,8 @@ terminate(Reason, State)
     close_channels(State),
     ok;
 terminate(_Reason, 
-	    State = #{ws_name := WSName,
-		      name := Name}) ->
+	    State = #state{ws_name=WSName,
+			   name=Name}) ->
     io:format("~n====================================================~n"
 	      "Module: ~p~n"
 	      "Pid:~p~n"
@@ -243,27 +256,3 @@ publish_message(Supervisor, Message) ->
     Ref = erlang:monitor(process, Pid),
     Ref.
 
-%% publish([],[])->
-%%     ok;
-%% publish(Handler = #{protocol := http}, Message) ->
-%%     publish(Handler = #{protocol => https}, Message);
-%% publish(_Handler = #{protocol := https, method :=Method, uri := URL},
-%% 	_Message = {_,#amqp_msg{props = #'P_basic'{
-%% 				       content_type = ContentType0
-%% 				      },
-%% 			    payload = Payload}})
-%%   when (Method =:= post) orelse
-%%        (Method =:= patch) orelse
-%%        (Method =:= put) orelse
-%%        (Method =:= delete) ->
-%%     ContentType = set_content_type(ContentType0),
-%%     Request = {URL, [], ContentType, Payload},
-%%     http_request(Method, Request).
-	    
-%% http_request(Method, Request) ->
-%%    httpc:request(Method,Request,[],[{sync, false}]).
-
-%% set_content_type(undefined) ->
-%%     ?DEFAULT_CONTENT_TYPE;
-%% set_content_type(ContentType)  ->
-%%     binary_to_list(ContentType).

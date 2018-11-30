@@ -15,17 +15,22 @@
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
+	 handle_continue/2,
 	 terminate/2, code_change/3, format_status/2]).
+
+-include_lib("amqp_client/include/amqp_client.hrl").
+
+-include("rabbit_webshovel.hrl").
 
 -define(SERVER, ?MODULE).
 
--record(state, {}).
+-record(state, {handle, deliver, msg}).
 
 %%%===================================================================
 %%% API
 %%%===================================================================
-start_link(Handler, Msg) ->
-    gen_server:start_link(?MODULE, [Handler, Msg], []).
+start_link(Handle, Msg) ->
+    gen_server:start_link(?MODULE, [Handle, Msg], []).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -37,58 +42,36 @@ start_link(Handler, Msg) ->
 %% Initializes the server
 %% @end
 %%--------------------------------------------------------------------
-init([Handle, Msg]) ->
+init([Handle,
+      _Msg={Deliver = #'basic.deliver'{},
+	   AmqpMessage=#amqp_msg{}}]) ->
     process_flag(trap_exit, true),
-    io:format("Http endpoint worker ~n    Handler: ~p~n    Message~p~n",
-	      [Handle,Msg]),
-    {ok, #state{}}.
+    {ok, #state{handle=Handle, deliver= Deliver,
+		msg=AmqpMessage},{continue, publish_message}}.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
+
+%% Handling continue message
+handle_continue(publish_message, State = #state{})->
+    publish(State#state.handle,State#state.deliver,State#state.msg),
+    {noreply, State};
+handle_continue(_Request, State) ->
+    {noreply,State}.
+
+
+
 %% Handling call messages
-%% @end
-%%--------------------------------------------------------------------
--spec handle_call(Request :: term(), From :: {pid(), term()}, State :: term()) ->
-			 {reply, Reply :: term(), NewState :: term()} |
-			 {reply, Reply :: term(), NewState :: term(), Timeout :: timeout()} |
-			 {reply, Reply :: term(), NewState :: term(), hibernate} |
-			 {noreply, NewState :: term()} |
-			 {noreply, NewState :: term(), Timeout :: timeout()} |
-			 {noreply, NewState :: term(), hibernate} |
-			 {stop, Reason :: term(), Reply :: term(), NewState :: term()} |
-			 {stop, Reason :: term(), NewState :: term()}.
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
 %% Handling cast messages
-%% @end
-%%--------------------------------------------------------------------
--spec handle_cast(Request :: term(), State :: term()) ->
-			 {noreply, NewState :: term()} |
-			 {noreply, NewState :: term(), Timeout :: timeout()} |
-			 {noreply, NewState :: term(), hibernate} |
-			 {stop, Reason :: term(), NewState :: term()}.
 handle_cast(_Request, State) ->
     {noreply, State}.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
 %% Handling all non call/cast messages
-%% @end
-%%--------------------------------------------------------------------
--spec handle_info(Info :: timeout() | term(), State :: term()) ->
-			 {noreply, NewState :: term()} |
-			 {noreply, NewState :: term(), Timeout :: timeout()} |
-			 {noreply, NewState :: term(), hibernate} |
-			 {stop, Reason :: normal | term(), NewState :: term()}.
 handle_info(_Info, State) ->
-    {noreply, State}.
+    io:format("~nInfo ~p~n", [_Info]),
+    {stop, {message_published, _Info}, State}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -133,3 +116,27 @@ format_status(_Opt, Status) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+publish(Handler = #{protocol := http},
+	Deliver = #'basic.deliver'{},
+	Message = #amqp_msg{}) ->
+    publish(Handler = #{protocol => https}, Deliver, Message);
+publish(_Handler = #{protocol := https, method :=Method, uri := URL},
+	_Deliver = #'basic.deliver'{},
+	_Message = #amqp_msg{props = #'P_basic'{
+					content_type = ContentType0},
+			     payload = Payload})
+  when (Method =:= post) orelse
+       (Method =:= patch) orelse
+       (Method =:= put) orelse
+       (Method =:= delete) ->
+    ContentType = set_content_type(ContentType0),
+    Request = {URL, [], ContentType, Payload},
+    http_request(Method, Request).
+	    
+http_request(Method, Request) ->
+   httpc:request(Method,Request,[],[{sync, false}]).
+
+set_content_type(undefined) ->
+    ?DEFAULT_CONTENT_TYPE;
+set_content_type(ContentType)  ->
+    binary_to_list(ContentType).
