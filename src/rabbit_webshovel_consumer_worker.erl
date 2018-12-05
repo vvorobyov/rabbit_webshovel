@@ -11,7 +11,9 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/4]).
+-export([start_link/4,
+        ack_message/2,noack_message/2,
+        get_channel/1, return_channel/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -22,64 +24,82 @@
 
 -include("rabbit_webshovel.hrl").
 -include_lib("amqp_client/include/amqp_client.hrl").
+
 -record(state, {ws_name,
-		name,
-		connection,
-		parent_sup,
-		consumer_ch,
-		consumer_tag,
-		free_chanels = [],
-		queue,
-		ack_mode,
-		handle,
-		publisher_sup,
-		endpoint_sup,
-		endpoint_msgs =#{}}).
+                name,
+                connection,
+                parent_sup,
+                consumer_ch,
+                consumer_tag,
+                free_channels = [],
+                queue,
+                ack_mode,
+                handle,
+                publisher,
+                no_ack_msg=[]}).
+
 %%%===================================================================
 %%% API
 %%%===================================================================
 start_link(WSName, Connection, Supervisor, Config) ->
     gen_server:start_link(?MODULE, [WSName, Connection, Supervisor, Config], []).
 
+ack_message(Pid, DeliveryTag)->
+    gen_server:cast(Pid, {ack_message, DeliveryTag}).
+
+noack_message(Pid, DeliveryTag)->
+    gen_server:cast(Pid, {noack_message, DeliveryTag}).
+
+get_channel(Pid)->
+    gen_server:call(Pid, get_channel).
+
+return_channel(Pid, Channel) when is_pid(Channel)->
+    gen_server:cast(Pid,{return_channel, Channel}).
+
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
 init([WSName, Connection, Supervisor,
-     Config =  #{name:=Name, 
-		 config := #{queue := Queue,
-			     prefetch_count := PrefCount,
-			     ack_mode := AckMode,
-			     handle := Handle}}]) ->
+      Config =  #{name:=Name,
+                  config := #{queue := Queue,
+                              prefetch_count := PrefCount,
+                              ack_mode := AckMode,
+                              handle := Handle}}]) ->
     process_flag(trap_exit, true),
-    io:format("`nConsumer ~p config:~p~n",[Name, Config]), %#todo remote in release
+    io:format("~nConsumer ~p config:~p~n",[Name, Config]), %#todo remote in release
     ConsChannel = make_channel(Connection),
     consume(ConsChannel, Queue, PrefCount, AckMode),
-    {ok, #state{ws_name = WSName, 
-		name = Name,
-		connection = Connection,
-		parent_sup = Supervisor,
-		consumer_ch = ConsChannel,
-		queue = Queue,
-		ack_mode = AckMode,
-		handle = Handle},
-     {continue, start_publisher_sup_sup}}.
+    {ok, #state{ws_name = WSName,
+                name = Name,
+                connection = Connection,
+                parent_sup = Supervisor,
+                consumer_ch = ConsChannel,
+                queue = Queue,
+                ack_mode = AckMode,
+                handle = Handle},
+     {continue, start_publisher}}.
 
-%% Запуск publisher_sup_sup и подчиненные супервизоры
-handle_continue(start_publisher_sup_sup,
-		State=#state{parent_sup = Sup,
-			     handle = Handle = #{protocol := Protocol}})->
+%% Запуск publisher_sup_sup и publisher_worker
+handle_continue(start_publisher, State = #state{})->
     io:format("~nContinue start_publisher_sup_sup~n"), %#todo remote in release
-    {PRef, PPid} = start_publisher_sup_sup(Sup),
-    WebEndpointPid = start_endpoint_sup(Protocol, PPid, Handle),
-    
-    {noreply, State#state{publisher_sup = {PRef, PPid},
-			  endpoint_sup = WebEndpointPid}};
-%% Не известные сообщения о продолжении
+    start_publisher_worker(State);
+%% Не известные cообщения о продолжении
 handle_continue(_Request, State) ->
     io:format("~nContinue any~n"),
     {noreply, State}.
 
 %%---------------------HANDLE CALL------------------------------------
+handle_call(get_channel, From,
+            State=#state{ publisher={_,From},
+                          free_channels=[],
+                          connection=Connection})->
+    Channel =make_channel(Connection),
+    {reply, Channel, State};
+handle_call(get_channel, From,
+            State=#state{ publisher={_,From},
+                          free_channels=[Channel|Channels]}) ->
+    {reply,Channel,State#state{free_channels=Channels}};
+%% Не известные синхронные запросы
 handle_call(_Request, _From, State) ->
     io:format("~n====================================================~n"
 	      "Module: ~p~n"
@@ -94,10 +114,36 @@ handle_call(_Request, _From, State) ->
 	       State#state.ws_name,
 	       State#state.name,
 	       State, _Request]),
-    Reply = ok,
-    {reply, Reply, State}.
+    {noreply, State}.
 
 %%---------------------HANDLE CAST------------------------------------
+%% обработка api ack_message
+handle_cast({ack_message, Tag}, State=#state{consumer_ch=Channel,no_ack_msg=Messages}) ->
+    case lists:member(Tag,Messages) of
+        true ->
+            ok = amqp_channel:cast(Channel, #'basic.ack'{delivery_tag=Tag}),
+            NoAckMessages=lists:delete(Tag, Messages),
+            {noreply, State#state{no_ack_msg=NoAckMessages}};
+        false -> {noreply,State}
+    end;
+%% обработка api noack_message
+handle_cast({noack_message, Tag}, State=#state{consumer_ch=Channel,no_ack_msg=Messages}) ->
+    case lists:member(Tag,Messages) of
+        true ->
+            ok = amqp_channel:cast(Channel, #'basic.nack'{delivery_tag=Tag}),
+            NoAckMessages=lists:delete(Tag, Messages),
+            {noreply, State#state{no_ack_msg=NoAckMessages}};
+        false -> {noreply, State}
+    end;
+%% обработка api return_channel
+handle_cast({return_channel, Channel}, State = #state{free_channels=Channels}) ->
+    case length(Channels) of
+        N when N =< ? CHANNEL_LIMIT ->
+            {noreply, State#state{free_channels=[Channel|Channels]}};
+        _ -> amqp_channel:close(Channel),
+             {noreply, State}
+    end;
+%% обработка не известных асинхронных вызовов
 handle_cast(_Request, State) ->
     io:format("~n====================================================~n"
 	      "Module: ~p~n"
@@ -116,14 +162,21 @@ handle_cast(_Request, State) ->
 
 %%---------------------HANDLE INFO-------------------------------------
 
-%% Сообщение о завершении rabbit_webshovel_publisher_sup_sup
+%% Сообщение о завершении rabbit_webshovel_publisher_worker
 handle_info({'DOWN', Ref, process, _Pid, shutdown},
-	    State=#state{publisher_sup={Ref, _}})->
+            State=#state{publisher={Ref, _}})->
     {noreply, State};
 handle_info({'DOWN', Ref, process, _Pid, _Reason},
-	    State=#state{publisher_sup = {Ref, _}})->
-    {noreply, State, {continue, start_publisher_supervisor_sup_sup}};
-
+            State=#state{publisher = {Ref, _}, ack_mode=no_ack})->
+    start_publisher_worker(State);
+handle_info({'DOWN', Ref, process, _Pid, _Reason},
+            State=#state{publisher = {Ref, _}, no_ack_msg=Messages})->
+    lists:map(
+      fun(Tag)->
+              amqp_channel:cast(State#state.consumer_ch,
+                                #'basic.nack'{delivery_tag=Tag})
+      end, Messages),
+    start_publisher_worker(State#state{no_ack_msg=[]});
 %% Получено сообщение о завершении процесса канала подписки
 handle_info({'EXIT', Channel, Reason},
 	    State = #state{consumer_ch = Channel})->
@@ -133,35 +186,19 @@ handle_info(#'basic.consume_ok'{consumer_tag=ConsTag}, State) ->
     io:format("~nConsumed. Tag: ~p~n",[ConsTag]),
     {noreply, State#state{consumer_tag = ConsTag}};
 %% Получено сообщение от брокера
-handle_info(Msg = {#'basic.deliver'{consumer_tag=ConsTag},
-		   #amqp_msg{payload=Payload}}, 
-	    State = #state{consumer_tag=ConsTag,
-			   endpoint_sup=EndPoint}) ->
-    io:format("~n===================================================~n"
-	      "Receive message: ~p~n"
-	      "All msg: ~p~n"
-	      "===================================================~n",
-	      [Payload, Msg]),
-    Ref = publish_message(EndPoint,Msg),
-    EndPointMsgs = State#state.endpoint_msgs,
-    {noreply,
-     State#state{
-       endpoint_msgs = EndPointMsgs#{Ref => Msg}}};
-%% Обработка сообщений от endpoint
-handle_info({'DOWN', Ref, process, _Pid, {message_published,
-					  Response}},
-	    State = #state{}) ->
-    case catch(maps:get(Ref, State#state.endpoint_msgs)) of
-	{error, _} ->
-	    io:format("~nUndefined endpoint process:~p~nMessage:~p~n",
-		      [_Pid, Response]),
-	    {noreply, State};
-	Value ->
-	    io:format("~nMsg: ~p~nResponse: ~p~n", [Value, Response]),
-	    {noreply, State}
+handle_info(Msg = {#'basic.deliver'{consumer_tag=ConsTag,
+                                    delivery_tag=DeliverTag},
+                   #amqp_msg{}},
+            State = #state{consumer_tag=ConsTag,
+                           publisher={_,Publisher},
+                           no_ack_msg=Messages}) ->
+    publish_message(Publisher, Msg),
+    case State#state.ack_mode of
+        no_ack -> {noreply, State};
+        _ -> {noreply, State#state{no_ack_msg=[DeliverTag|Messages]}}
     end;
-handle_info(_Info,
-	    State = #state{ws_name=WSName,
+%% Получено неизвестное сообщение
+handle_info(_Info, State = #state{ws_name=WSName,
 			   name=Name}) ->
     io:format("~n====================================================~n"
 	      "Module: ~p~n"
@@ -175,14 +212,14 @@ handle_info(_Info,
 	      [?MODULE, self(), WSName, Name, State, _Info]),
     {noreply, State}.
 
-%%--------------------------------------------------------------------
+%%------------------------------------------------------------------
 terminate({close_channel, _Reason}, _State)->
     ok;
-terminate(Reason, State) 
+terminate(Reason, State)
   when Reason =:= shutdown; Reason =:= killed ->
     close_channels(State),
     ok;
-terminate(_Reason, 
+terminate(_Reason,
 	    State = #state{ws_name=WSName,
 			   name=Name}) ->
     io:format("~n====================================================~n"
@@ -218,41 +255,28 @@ make_channel(Connection)->
 consume(Channel,Queue, PrefCount, AckMode)->
     amqp_channel:call(Channel,
 		      #'basic.qos'{prefetch_count = PrefCount}),
-    amqp_channel:subscribe(Channel, 
-    			   #'basic.consume'{queue = Queue, 
+    amqp_channel:subscribe(Channel,
+    			   #'basic.consume'{queue = Queue,
 					    no_ack= AckMode=:=no_ack},
 			   self()).
-    
-close_channels(#{consume_channel :=Channel}) ->
+
+close_channels(#state{consumer_ch =Channel}) ->
     amqp_channel:close(Channel).
 
-start_publisher_sup_sup(Supervisor)->
-    PubSSupSpec = {publisher,
-		   {rabbit_webshovel_publisher_sup_sup,
-		    start_link,[]},
-		   temporary,
-		   16#ffffffff,
-		   supervisor,
-		   [rabbit_webshovel_publisher_sup_sup]},
-    {ok, PPid} = supervisor2:start_child(Supervisor,PubSSupSpec),
-    PRef = erlang:monitor(process, PPid),
-    {PRef, PPid}.
 
-start_endpoint_sup(https, Supervisor, Handle) ->
-    start_endpoint_sup(http, Supervisor, Handle);
-start_endpoint_sup(http, Supervisor, Handle) ->
-    EndPointSupSpec = {http_endpoint,
-		       {rabbit_webshovel_http_endpoint_sup, start_link,
-			[Handle]},
-		       permanent,
-		       16#ffffffff,
-		       supervisor,
-		       [rabbit_webshovel_http_endpoint_sup]},
-    {ok, Pid} = supervisor:start_child(Supervisor, EndPointSupSpec),
-    Pid.
+publish_message(Publisher, Message) ->
+    rabbit_webshovel_publisher_worker:publish_message(Publisher,Message),
+    ok.
 
-publish_message(Supervisor, Message) ->
-    {ok, Pid} = supervisor:start_child(Supervisor, [Message]),
-    Ref = erlang:monitor(process, Pid),
-    Ref.
-
+start_publisher_worker(State=#state{parent_sup=Supervisor, handle=Handle})->
+    PublishWorkSpec = {publisher_worker,
+                       {rabbit_webshovel_publisher_worker,
+                        start_link,
+                        [Supervisor,self(),Handle#{ack_mode => State#state.ack_mode}]},
+                       temporary,
+                       16#ffffffff,
+                       worker,
+                       [rabbit_webshovel_publisher_worker]},
+    {ok, Pid} = supervisor2:start_child(Supervisor,PublishWorkSpec),
+    Ref = erlang:monitor(process,Pid),
+    {noreply, State#state{publisher = {Ref, Pid}}}.

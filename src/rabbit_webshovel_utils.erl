@@ -190,8 +190,8 @@ validate_dest_uri(V) ->
 
 validate_allowed_value({Value, List}) ->
     case lists:member(Value, List) of
-	true ->
-	    Value;
-	false ->
-	    throw({error, {waiting_for_one_of,List}})
+        true ->
+            Value;
+        false ->
+            throw({error, {waiting_for_one_of,List}})
     end.

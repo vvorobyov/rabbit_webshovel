@@ -1,9 +1,11 @@
-rabbit_webshovel
-=====
+# RabbitMQ WebShovel Plugin
 
-An OTP application
+Плагин RabbitMQ осуществляющий публикацию сообщений посредством WebAPI или SOAP
 
-Build
------
+## Build
 
-    $ rebar3 compile
+    $ make app
+
+## Configuration
+### Static configuration
+*as

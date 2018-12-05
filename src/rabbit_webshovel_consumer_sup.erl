@@ -29,11 +29,10 @@ start_link(WSName, Connection, Config) ->
 %%% Supervisor callbacks
 %%%===================================================================
 init([WSName, Connection, Config = #{name := Name}]) ->
-    
     SupFlags = {rest_for_one, 1, 5},
     ConsumerSpec = {Name,
-		    {rabbit_webshovel_consumer_worker, 
-		     start_link, 
+		    {rabbit_webshovel_consumer_worker,
+		     start_link,
 		     [WSName, Connection,self(),Config]},
 		    permanent,
 		    5000,

@@ -24,7 +24,7 @@
 
 -define(SERVER, ?MODULE).
 
--record(state, {handle, deliver, msg}).
+-record(state, {handle, deliver, msg, request_id}).
 
 %%%===================================================================
 %%% API
@@ -44,7 +44,7 @@ start_link(Handle, Msg) ->
 %%--------------------------------------------------------------------
 init([Handle,
       _Msg={Deliver = #'basic.deliver'{},
-	   AmqpMessage=#amqp_msg{}}]) ->
+            AmqpMessage=#amqp_msg{}}]) ->
     process_flag(trap_exit, true),
     {ok, #state{handle=Handle, deliver= Deliver,
 		msg=AmqpMessage},{continue, publish_message}}.
@@ -52,12 +52,10 @@ init([Handle,
 
 %% Handling continue message
 handle_continue(publish_message, State = #state{})->
-    publish(State#state.handle,State#state.deliver,State#state.msg),
-    {noreply, State};
+    RequestId = publish_message(State),
+    {noreply, State#state{request_id = RequestId}};
 handle_continue(_Request, State) ->
     {noreply,State}.
-
-
 
 %% Handling call messages
 handle_call(_Request, _From, State) ->
@@ -116,23 +114,23 @@ format_status(_Opt, Status) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-publish(Handler = #{protocol := http},
-	Deliver = #'basic.deliver'{},
-	Message = #amqp_msg{}) ->
-    publish(Handler = #{protocol => https}, Deliver, Message);
-publish(_Handler = #{protocol := https, method :=Method, uri := URL},
-	_Deliver = #'basic.deliver'{},
-	_Message = #amqp_msg{props = #'P_basic'{
-					content_type = ContentType0},
-			     payload = Payload})
+publish_message(State = #state{handle = Handle = #{protocol := https}}) ->
+    publish_message(State#state{handle = Handle#{protocol => https}});
+
+publish_message(State = #state{handle = #{protocol := https,
+                                           method :=Method,
+                                           uri := URL}})
   when (Method =:= post) orelse
        (Method =:= patch) orelse
        (Method =:= put) orelse
        (Method =:= delete) ->
+    #amqp_msg{
+       props = #'P_basic'{content_type=ContentType0},
+       payload= Payload} = State#state.msg,
     ContentType = set_content_type(ContentType0),
     Request = {URL, [], ContentType, Payload},
     http_request(Method, Request).
-	    
+
 http_request(Method, Request) ->
    httpc:request(Method,Request,[],[{sync, false}]).
 
