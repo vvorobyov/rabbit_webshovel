@@ -7,8 +7,17 @@
 %%% Created : 23 Nov 2018 by Vladislav Vorobyov <vlad@erldev>
 %%%-------------------------------------------------------------------
 -module(rabbit_webshovel_consumer_sup).
+-include("rabbit_webshovel.hrl").
+-behaviour(supervisor).
+-define(CONS_SPEC(NAME,CONNECTION, CONFIG),
+        {rabbit_webshovel_consumer_worker,
+         {rabbit_webshovel_consumer_worker,
+          start_link, [NAME, CONNECTION, self(), CONFIG]},
+         permanent,
+         5000,
+         worker,
+         [rabbit_webshovel_consumer_worker]}).
 
--behaviour(supervisor2).
 
 %% API
 -export([start_link/3]).
@@ -23,22 +32,15 @@
 %%%===================================================================
 
 start_link(WSName, Connection, Config) ->
-    supervisor2:start_link(?MODULE, [WSName, Connection, Config]).
+    supervisor:start_link(?MODULE, [WSName, Connection, Config]).
 
 %%%===================================================================
 %%% Supervisor callbacks
 %%%===================================================================
-init([WSName, Connection, Config = #{name := Name}]) ->
+init([WSName, Connection, Config]) ->
+    io:format("~n~p ~p ~p ~p~n",[?MODULE,self(),WSName, Config#dst.name]),
     SupFlags = {rest_for_one, 1, 5},
-    ConsumerSpec = {Name,
-		    {rabbit_webshovel_consumer_worker,
-		     start_link,
-		     [WSName, Connection,self(),Config]},
-		    permanent,
-		    5000,
-		    worker,
-		    [rabbit_webshovel_consumer_worker]},
-
+    ConsumerSpec = ?CONS_SPEC(WSName,Connection, Config),
     {ok, {SupFlags, [ConsumerSpec]}}.
 
 %%%===================================================================

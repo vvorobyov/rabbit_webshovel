@@ -11,7 +11,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/3]).
+-export([start_link/4]).
 -export([publish_message/2]).
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -20,40 +20,40 @@
 
 -define(SERVER, ?MODULE).
 
--record(state, {supervisor,
+-record(state, {ws_name,
+                supervisor,
                 consumer,
-                publisher_ssup,
+                response_sup,
                 endpoint_sup,
-                handle,
-                endpoint_msgs =#{},
-                ack_mode}).
-
+                config,
+                endpoint_msgs =#{}}).
+-include("rabbit_webshovel.hrl").
 -include_lib("amqp_client/include/amqp_client.hrl").
 
 %%%===================================================================
 %%% API
 %%%===================================================================
-start_link(Supervisor, Consumer, Handle) ->
-    gen_server:start_link(?MODULE, {Supervisor,Consumer, Handle}, []).
+start_link(WSName, Supervisor, Consumer, Config) ->
+    gen_server:start_link(?MODULE, {WSName, Supervisor,Consumer, Config}, []).
 
 publish_message(Pid, Message)->
     gen_server:cast(Pid,{publish_message, Message}).
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
-init({Supervisor,Consumer,Handle= #{ack_mode :=AckMode}}) ->
+init({WSName, Supervisor, Consumer, Config}) ->
+    io:format("~n~p ~p ~p ~p~n",[?MODULE,self(),WSName, Config#dst.name]),
     process_flag(trap_exit, true),
-    {ok, #state{supervisor=Supervisor,
+    {ok, #state{ws_name = WSName,
+                supervisor=Supervisor,
                 consumer=Consumer,
-                handle=Handle,
-                ack_mode=AckMode},
-    {continue, start_publisher_sup_sup}}.
+                config=Config}}.
+%    {continue, start_publisher_sup_sup}}.
 
-handle_continue(start_endpoint_sups, State)->
-    start_endpoint_sups(State);
-handle_continue(start_publisher_sup_sup, State) ->
-    start_publisher_sup_sup(State);
-
+%% handle_continue(start_endpoint_sups, State)->
+%%     start_endpoint_sups(State);
+%% handle_continue(start_publisher_sup_sup, State) ->
+%%     start_publisher_sup_sup(State);
 handle_continue(_Request, State) ->
     {noreply,State}.
 
@@ -62,14 +62,15 @@ handle_call(_Request, _From, State) ->
     {reply, Reply, State}.
 
 handle_cast({publish_message,
-             Message={#'basic.deliver'{delivery_tag=DT},_}},
+             Message={#'basic.deliver'{delivery_tag=_DT},_}},
             State) ->
     io:format("~n rabbit_webshovel_publisher_worker ~p~nmessage: ~p~n",
               [self(),Message]),
-    {ok, Pid} = supervisor:start_child(State#state.endpoint_sup,[Message]),
-    Ref=erlang:monitor(process, Pid),
-    EndPointMsg = State#state.endpoint_msgs,
-    {noreply,State#state{endpoint_msgs=EndPointMsg#{Ref => DT}}};
+    %% {ok, Pid} = supervisor:start_child(State#state.endpoint_sup,[Message]),
+    %% Ref=erlang:monitor(process, Pid),
+    %% EndPointMsg = State#state.endpoint_msgs,
+    %% {noreply,State#state{endpoint_msgs=EndPointMsg#{Ref => DT}}};
+    {noreply,State};
 handle_cast(_Request, State) ->
     {noreply, State}.
 
@@ -77,8 +78,6 @@ handle_info(_Info, State) ->
     {noreply, State}.
 
 terminate(_Reason, _State) ->
-    io:format("~n rabbit_webshovel_publisher_worker ~p~n"
-              "terminate with reason: ~p~n", [self(),_Reason]),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -90,28 +89,28 @@ format_status(_Opt, Status) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-start_endpoint_sups(State)->
-    io:format("~n rabbit_webshovel_publisher_worker~n~p~n", [State]),
-    {noreply, State}.
+%% start_endpoint_sups(State)->
+%%     io:format("~n rabbit_webshovel_publisher_worker~n~p~n", [State]),
+%%     {noreply, State}.
 
-start_publisher_sup_sup(State)->
-    io:format("~p~n", [State]),
-    PubSSupSpec = {publisher_super_sup,
-                   {rabbit_webshovel_publisher_sup_sup, start_link, []},
-                   temporary,
-                   16#ffffffff,
-                   supervisor,
-                   [rabbit_webshovel_publisher_sup_sup]
-                  },
-    {ok,PubSSPid} = supervisor2:start_child(
-                      State#state.supervisor, PubSSupSpec),
-    Ref=erlang:monitor(process,PubSSPid),
-    EndpointSupSpec = #{id => endpoint_sup,
-                        start => {rabbit_webshovel_endpoint_sup,
-                                 start_link, [State#state.handle]},
-                        restart => permanent,
-                        shutdown => 5000,
-                        type => supervisor,
-                        modules => [rabbit_webshovel_endpoint_sup]},
-    {ok,EndpointPid} = supervisor:start_child(PubSSPid, EndpointSupSpec),
-    {noreply,State#state{publisher_ssup=Ref, endpoint_sup=EndpointPid}}.
+%% start_publisher_sup_sup(State)->
+%%     io:format("~p~n", [State]),
+%%     PubSSupSpec = {publisher_super_sup,
+%%                    {rabbit_webshovel_publisher_sup_sup, start_link, []},
+%%                    temporary,
+%%                    16#ffffffff,
+%%                    supervisor,
+%%                    [rabbit_webshovel_publisher_sup_sup]
+%%                   },
+%%     {ok,PubSSPid} = supervisor2:start_child(
+%%                       State#state.supervisor, PubSSupSpec),
+%%     Ref=erlang:monitor(process,PubSSPid),
+%%     EndpointSupSpec = #{id => endpoint_sup,
+%%                         start => {rabbit_webshovel_endpoint_sup,
+%%                                  start_link, [State#state.handle]},
+%%                         restart => permanent,
+%%                         shutdown => 5000,
+%%                         type => supervisor,
+%%                         modules => [rabbit_webshovel_endpoint_sup]},
+%%     {ok,EndpointPid} = supervisor:start_child(PubSSPid, EndpointSupSpec),
+%%     {noreply,State#state{publisher_ssup=Ref, endpoint_sup=EndpointPid}}.

@@ -9,7 +9,7 @@
 -module(rabbit_webshovel_connection_worker).
 
 -behaviour(gen_server).
-
+-include("rabbit_webshovel.hrl").
 %% API
 -export([start_link/2]).
 %% gen_server callbacks
@@ -18,11 +18,20 @@
 
 -define(SERVER, ?MODULE).
 
-%% -record(state, {name = unknown,
-%% 		supervisor = unknown,
-%% 		cons_ref = unknown,
-%% 		cons_config = unknown,
-%% 		connection = unknown}).
+-define(CONS_SS_SPEC(NAME,CONNECTION, CONFIG),
+        {rabbit_webshovel_consumer_sup_sup,
+         {rabbit_webshovel_consumer_sup_sup,
+          start_link, [NAME, CONNECTION, CONFIG]},
+         temporary,
+         16#ffffffff,
+         supervisor,
+         [rabbit_webshovel_consumer_sup_sup]}).
+
+-record(state, {name,
+                supervisor,
+                connection,
+                dst_config,
+                cons_ref}).
 
 %%%===================================================================
 %%% API
@@ -35,124 +44,65 @@ start_link(Supervisor, Config) ->
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
-init([Supervisor,
-     #{name := Name, 
-       source := #{amqp_params := AMQPParams},
-       destinations:=DestConfig}]) ->
-    io:format("~n!!! Init connection: ~p. PID:~p !!!~n",[Name, self()]),
+init([Supervisor, Config = #webshovel{}]) ->
+    io:format("~n~p ~p ~p ~p~n",[?MODULE,self(),Config#webshovel.name,'_']),
     process_flag(trap_exit, true),
-    rand:seed(exs64, erlang:timestamp()),
-    Connection = make_connection(Name, AMQPParams),
-    {ok, #{name => Name, 
-	   supervisor => Supervisor,
-	   connection => Connection,
-	   cons_config => DestConfig},
-     {continue, start_consumers_sup_sup}}.    
-%%-----------------------HANDLE CALL-----------------------------------
-%% Не известные зипросы
-handle_call(_Request, _From, State=#{name := Name}) ->
-    io:format("~n====================================================~n"
-	      "Module: ~p~n"
-	      "Pid:~p~n"
-	      "WebShovel Name: ~p~n"
-	      "State: ~p~n"
-	      "----------------------------------------------------~n"
-	      "~nUnknown call: ~p~n"
-	      "====================================================~n",
-	      [?MODULE, self(), Name, State, _Request]),
-    Reply = {error, error_request},
-    {reply, Reply, State}.
+    Connection = make_connection(Config),
+    {ok, #state{name = Config#webshovel.name,
+                supervisor = Supervisor,
+                connection = Connection,
+                dst_config = Config#webshovel.destinations},
+     {continue, start_consumers_sup_sup}}.
 
-%%-----------------------HANDLE CONTINUE-----------------------------------
+%%-----------------------HANDLE CALL----------------------------------
+%% Не известные зипросы
+handle_call(_Request, _From, State) ->
+    {noreply, State}.
+
+%%-----------------------HANDLE CONTINUE------------------------------
 %% Запуск consumers_sup_sup
 handle_continue(start_consumers_sup_sup, State)->
-    Ref = start_consumers_sup_sup(State),
-    {noreply, State#{cons_ref => Ref}};
+    start_consumers_sup_sup(State);
 %% Не известные запросы продолжения
-handle_continue(_Request, State=#{name := Name}) ->
-    io:format("~n====================================================~n"
-	      "Module: ~p~n"
-	      "Pid:~p~n"
-	      "WebShovel Name: ~p~n"
-	      "State: ~p~n"
-	      "----------------------------------------------------~n"
-	      "~nUnknown continue: ~p~n"
-	      "====================================================~n",
-	      [?MODULE, self(), Name, State, _Request]),
+handle_continue(_Request, State) ->
     {noreply, State}.
 
-%%-----------------------HANDLE CAST-----------------------------------
+%%-----------------------HANDLE CAST----------------------------------
 %% Неизвестные асинхронные запросы
-handle_cast(_Request, State=#{name := Name}) ->
-    io:format("~n====================================================~n"
-	      "Module: ~p~n"
-	      "Pid:~p~n"
-	      "WebShovel Name: ~p~n"
-	      "State: ~p~n"
-	      "----------------------------------------------------~n"
-	      "~nUnknown cast: ~p~n"
-	      "====================================================~n",
-	      [?MODULE, self(), Name, State, _Request]),
+handle_cast(_Request, State) ->
     {noreply, State}.
 
 
-%%-----------------------HANDLE INFO-----------------------------------
+%%-----------------------HANDLE INFO----------------------------------
 %% Сообщение о завершении процесса супервизора consumers по
 %% причине sutdown
 handle_info({'DOWN', Ref, process, _Pid, shutdown},
-	    State=#{cons_ref := Ref})->
+            State=#state{cons_ref = Ref})->
     {noreply, State};
-
 %% Сообщение о завершении процесса супервизора consumers по
 %% причине ошибки
 handle_info({'DOWN', Ref, process, _Pid, _Reason},
-	    State=#{cons_ref := Ref})->
-    {noreply, State, {continue, start_consumers_sup_sup}};
-
+	    State=#state{cons_ref = Ref})->
+    start_consumers_sup_sup(State);
 %% Сообщение о завершении процесса подключения
-handle_info({'EXIT', Conn, Reason}, State=#{connection := Conn}) ->
+handle_info({'EXIT', Conn, Reason}, State=#state{connection = Conn}) ->
     {stop, {connection_close,Reason}, State};
-
 %% Обработка прочих сообщений
-handle_info(_Info, State=#{name := Name}) ->
-    io:format("~n====================================================~n"
-	      "Module: ~p~n"
-	      "Pid:~p~n"
-	      "WebShovel Name: ~p~n"
-	      "State: ~p~n"
-	      "----------------------------------------------------~n"
-	      "~nUnknown info: ~p~n"
-	      "====================================================~n",
-	      [?MODULE, self(), Name, State, _Info]),
+handle_info(_Info, State) ->
     {noreply, State}.
 
 
-%%-----------------------HANDLE TERMINATE--------------------------------
+%%-----------------------HANDLE TERMINATE-----------------------------
 %% Завершение работы в связи с закрытием подключения
-terminate({connection_close, Reason},
-	  _State=#{name := Name}) ->
-    io:format("~n====================================================~n"
-	      "WebShovel Name: ~p~n"
-	      "----------------------------------------------------~n"
-	      "Connection close with reason : ~p~n"
-	      "====================================================~n",
-	      [ Name, Reason]),
+terminate({connection_close, _Reason}, #state{}) ->
     ok;
 %% Завершение работы иницированное супервизором
-terminate(Reason,
-	  _State = #{connection := Connection})
+terminate(Reason, #state{connection = Connection})
   when Reason =:= shutdown; Reason =:= killed ->
     connection_close(Connection),
     ok;
-%% Другие причины завершения работы 
-terminate(Reason,
-	  _State=#{name := Name, connection := Connection}) ->
-    io:format("~n====================================================~n"
-	      "WebShovel Name: ~p~n"
-	      "----------------------------------------------------~n"
-	      "Terminate webshovel with reason: ~p~n"
-	      "====================================================~n",
-	      [Name, Reason]),
+%% Другие причины завершения работы
+terminate(_Reason, #state{connection = Connection}) ->
     connection_close(Connection),
     ok.
 
@@ -167,20 +117,23 @@ format_status(_Opt, Status) ->
 %%%===================================================================
 
 %% Функция создания подключения к брокеру
+make_connection(#webshovel{name = Name,
+                           source = #src{amqp_params=AmqpParams}})->
+    make_connection(Name,AmqpParams).
+
 make_connection(WSName,[])->
-    throw({error, 
+    throw({error,
 	   {connection_not_started, read_log_for_reason}, WSName});
-make_connection(WSName, [AmqpParam|Rest])->
-    ConnName = get_connection_name(WSName),
+make_connection(Name, [AmqpParam|Rest])->
+    ConnName = get_connection_name(Name),
     case amqp_connection:start(AmqpParam, ConnName) of
-	{ok, Conn} ->
-	    link(Conn),
-	    io:format("~n!!! Connected.Connection PID: ~p~n",[Conn]),
-	    Conn;
-	{error, Reason} ->
-	    io:format("~n!!! Error start connection with reason:~p~n", 
-		      [Reason]),
-	    make_connection(WSName, Rest)
+        {ok, Conn} ->
+            link(Conn),
+            Conn;
+        {error, Reason} ->
+            io:format("~n!!! Error start connection with reason:~p~n", 
+                      [Reason]),
+            make_connection(Name, Rest)
     end.
 
 %% Функция закрытия подключения
@@ -203,19 +156,11 @@ get_connection_name(_) ->
     <<"WebShovel">>.
 
 %% Функция запуска ConsumerSupSupervisor
-start_consumers_sup_sup(#{name := Name, 
-			  connection := Connection, 
-			  cons_config := Config,
-			  supervisor := Supervisor})->
-    CunsSSupSpec = {consumers,
-		    {rabbit_webshovel_consumer_sup_sup,
-		     start_link, [Name,
-				  Connection,
-				  Config]},
-		    temporary, 
-		    16#ffffffff,
-		    supervisor,
-		    [rabbit_webshovel_consumer_sup_sup]},
-    
+start_consumers_sup_sup(S = #state{name = Name,
+                                   connection = Connection,
+                                   dst_config = Config,
+                                   supervisor = Supervisor})->
+    CunsSSupSpec = ?CONS_SS_SPEC(Name, Connection, Config),
     {ok, Pid} = supervisor2:start_child(Supervisor, CunsSSupSpec),
-    erlang:monitor(process,Pid).
+    Ref = erlang:monitor(process,Pid),
+    {noreply, S#state{cons_ref = Ref}}.
