@@ -19,10 +19,10 @@
          worker,
          [rabbit_webshovel_publisher_worker]}).
 %% API
--export([start_link/4,
-        ack_message/2,noack_message/2,
+-export([start_link/4]).
+-export([ack_message/2,noack_message/2,
         get_channel/1, return_channel/2]).
-
+-export([error/1]).
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
 	 handle_continue/2, terminate/2, code_change/3,
@@ -65,6 +65,8 @@ get_channel(Pid)->
 return_channel(Pid, Channel) when is_pid(Channel)->
     gen_server:cast(Pid,{return_channel, Channel}).
 
+error(Pid)->
+    gen_server:cast(Pid, error).
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
@@ -117,6 +119,9 @@ handle_cast({return_channel, Channel}, S = #state{}) ->
     FreeCh = [Channel|S#state.free_channels],
     {noreply, S#state{free_channels=FreeCh, used_channels=UsedCh}};
 %% обработка не известных асинхронных вызовов
+handle_cast(error, State) ->
+    _=1/0,
+    {noreply, State};
 handle_cast(_Request, State) ->
     {noreply, State}.
 

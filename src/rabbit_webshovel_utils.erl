@@ -51,22 +51,23 @@ parse_current(WSName, WSConfig)->
 %% Разбор раздела source конфигурации
 parse_source(SrcConfig) ->
     validate(SrcConfig),
-    {protocol, Protocol0} = proplists:lookup(protocol, SrcConfig),
+    Protocol0 = proplists:get_value(protocol, SrcConfig),
     Protocol = validate_parameter(
                  protocol,
                  fun validate_allowed_value/1,
                  {Protocol0, ?SRC_PROTOCOL_ALLOWED_VALUES}),
-    {uris, URIs} = proplists:lookup(uris, SrcConfig),
+    URIs = proplists:get_value(uris, SrcConfig),
     AMQPParams = validate_parameter(
                    uris,
                    fun validate_src_uris/1,
                    URIs),
+    ReconnectDelay0 = proplists:get_value(reconnect_delay,
+                                          SrcConfig,
+                                          ?DEFAULT_RECONNECT_DELAY),
     ReconnectDelay = validate_parameter(
                        reconnect_delay,
                        fun valid_non_negative_integer/1,
-                       proplists:get_value(reconnect_delay,
-                                           SrcConfig,
-                                           ?DEFAULT_RECONNECT_DELAY)),
+                       ReconnectDelay0),
     #src{protocol = Protocol,
          amqp_params=AMQPParams,
          reconnect_delay=ReconnectDelay}.
@@ -81,7 +82,7 @@ parse_destinations(DestConfig) ->
 
 
 parse_destination(Name, Config)->
-    {queue, Queue0} = proplists:lookup(queue, Config),
+    Queue0 = proplists:get_value(queue, Config),
     Queue = validate_parameter(queue,
                                fun valid_binary/1,
                                Queue0),
@@ -99,7 +100,7 @@ parse_destination(Name, Config)->
                 ack_mode,
                 fun validate_allowed_value/1,
                 {AckMode0, ?ACKMODE_ALLOWED_VALUES}),
-    {endpoint, EndPoint0} = proplists:lookup(endpoint, Config),
+    {endpoint, EndPoint0} = proplists:get_value(endpoint, Config),
     EndPoint = parse_endpoint(EndPoint0),
     #dst{name = Name,
          queue = Queue,
@@ -114,7 +115,7 @@ parse_endpoint(Config) ->
     Protocol = validate_parameter(protocol,
                                   fun validate_allowed_value/1,
                                   {Protocol0, ?DEST_PROTOCOL_ALLOWED_VALUE}),
-    {uri, URI0} = proplists:lookup(uri, Config),
+    URI0 = proplists:get_value(uri, Config),
     URI = validate_parameter(uri, fun validate_dest_uri/1, URI0),
     Method0 = proplists:get_value(method, Config,
                                   ?DEFAULT_HTTP_METHOD),
@@ -190,7 +191,7 @@ validate_parameter(Param, Fun, Value) ->
     try
         Fun(Value)
     catch
-        _:{error, Err} ->
+        _:{error, Err} -> io:format("~n=============================================~n"),
             throw({error,{invalid_parameter_value, Param, Err}})
     end.
 
@@ -227,7 +228,7 @@ validate_allowed_value({Value, List}) ->
             throw({error, {waiting_for_one_of,List}})
     end.
 
-validate_src_uris(URIs)->
+validate_src_uris(URIs) when is_list(URIs)->
     Fun = fun (URI, Acc) ->
                   case amqp_uri:parse(URI) of
                       {ok, AMQPParams0} ->
@@ -236,4 +237,7 @@ validate_src_uris(URIs)->
                           throw({invalid_source_uri, {URI, Reason}})
                   end
           end,
-    lists:reverse(lists:foldl(Fun, [], URIs)).
+    lists:reverse(lists:foldl(Fun, [], URIs));
+validate_src_uris(Other)->
+    throw({error, {requare_list, Other}}).
+

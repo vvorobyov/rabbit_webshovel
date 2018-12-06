@@ -6,7 +6,7 @@
 %%% @end
 %%% Created : 28 Nov 2018 by Vladislav Vorobyov <vlad@erldev>
 %%%-------------------------------------------------------------------
--module(rabbit_webshovel_publisher_sup_sup).
+-module(rabbit_webshovel_publisher_sup).
 
 -behaviour(supervisor).
 

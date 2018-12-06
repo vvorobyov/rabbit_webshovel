@@ -54,8 +54,8 @@ start_link() ->
               {local, ?SERVER}, ?MODULE,
               fun rabbit_misc:execute_mnesia_transaction/1,
               ?MODULE, [Configuration]);
-        Error ->
-            Error
+        {error, Reason} ->
+            {error, Reason}
     end.
 
 %%%===================================================================
@@ -83,10 +83,10 @@ make_child_specs(Configurations)->
 
 get_config() ->
     case catch file:consult("/home/vlad/rabbit_webshovel/include/config.erl") of
-	{ok, [Value]} -> {ok,Value};
-	{error, Error}  ->
-	    io:format("~n!!! Error load config!!!~n~p~n", [Error]),
-	    {ok,[]}
+        {ok, [Value]} -> {ok,Value};
+        {error, Error}  ->
+            io:format("~n!!! Error load config!!!~n~p~n", [Error]),
+            {ok,[]}
     end.
 
 parse_configuration({ok, Env}) ->
