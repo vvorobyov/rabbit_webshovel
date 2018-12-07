@@ -100,13 +100,15 @@ parse_destination(Name, Config)->
                 ack_mode,
                 fun validate_allowed_value/1,
                 {AckMode0, ?ACKMODE_ALLOWED_VALUES}),
-    {endpoint, EndPoint0} = proplists:get_value(endpoint, Config),
+    EndPoint0 = proplists:get_value(endpoint, Config),
     EndPoint = parse_endpoint(EndPoint0),
+    Response0 = proplists:get_value(response, Config),
     #dst{name = Name,
          queue = Queue,
          prefetch_count = PrefCount,
          ack_mode = AckMode,
-         endpoint = EndPoint}.
+         endpoint = EndPoint,
+         response = Response0}.
 
 parse_endpoint(Config) ->
     validate(Config),

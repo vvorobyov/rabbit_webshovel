@@ -11,17 +11,17 @@
 -behaviour(supervisor).
 
 -include("rabbit_webshovel.hrl").
--define(CHILD_SPEC(NAME,CONNECTION, CONFIG),
+-define(CHILD_SPEC(NAME,CONNECTION,CONFIG),
         {CONFIG#dst.name,
-         {rabbit_webshovel_consumer_sup,
-          start_link, [NAME, CONNECTION, CONFIG]},
+         {rabbit_webshovel_consumer_sup, start_link,
+          [NAME,CONNECTION, CONFIG]},
          permanent,
          16#ffffffff,
          supervisor,
          [rabbit_webshovel_consumer_sup]}).
 
 %% API
--export([start_link/3]).
+-export([start_link/1]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -31,13 +31,13 @@
 %%%===================================================================
 %%% API functions
 %%%===================================================================
-start_link(WSName, Connection, Config) ->
-    supervisor:start_link(?MODULE, [WSName, Connection, Config]).
+start_link(Args) ->
+    supervisor:start_link(?MODULE, Args).
 
 %%%===================================================================
 %%% Supervisor callbacks
 %%%===================================================================
-init(Args=[WSName,_,_]) ->
+init(Args={WSName,_,_,_}) ->
     io:format("~n~p ~p ~p ~p~n",[?MODULE,self(),WSName,'_']),
     SupFlags = {one_for_one, 1, 5},
     ChildSpecs = make_child_specs(Args),
@@ -46,9 +46,11 @@ init(Args=[WSName,_,_]) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-make_child_specs([WSName, Connection, Config])->
+make_child_specs({WSName, Connection, SrcProtocol, Config})->
     Fun = fun(DstConfig, AccIn) ->
-                  ChildSpec =?CHILD_SPEC(WSName, Connection,DstConfig),
+                  ChildSpec =?CHILD_SPEC(WSName, Connection,
+                                         DstConfig#dst{
+                                           src_protocol=SrcProtocol}),
                   [ChildSpec|AccIn]
           end,
     lists:foldl(Fun, [], Config).

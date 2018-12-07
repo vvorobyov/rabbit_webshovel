@@ -18,10 +18,10 @@
 
 -define(SERVER, ?MODULE).
 
--define(CONS_SS_SPEC(NAME,CONNECTION, CONFIG),
+-define(CONS_SS_SPEC(NAME,CONNECTION,PROTOCOL, CONFIG),
         {rabbit_webshovel_consumer_sup_sup,
          {rabbit_webshovel_consumer_sup_sup,
-          start_link, [NAME, CONNECTION, CONFIG]},
+          start_link, [{NAME, CONNECTION, PROTOCOL, CONFIG}]},
          temporary,
          16#ffffffff,
          supervisor,
@@ -29,7 +29,9 @@
 
 -record(state, {name,
                 supervisor,
+                protocol,
                 connection,
+                src_config,
                 dst_config,
                 cons_ref}).
 
@@ -49,9 +51,11 @@ init([Supervisor, Config = #webshovel{}]) ->
     process_flag(trap_exit, true),
     Connection = make_connection(Config),
     {ok, #state{name = Config#webshovel.name,
+                protocol = Config#webshovel.source#src.protocol,
                 supervisor = Supervisor,
                 connection = Connection,
-                dst_config = Config#webshovel.destinations},
+                dst_config = Config#webshovel.destinations,
+                src_config = Config#webshovel.source},
      {continue, start_consumers_sup_sup}}.
 
 %%-----------------------HANDLE CALL----------------------------------
@@ -85,23 +89,17 @@ handle_info({'DOWN', Ref, process, _Pid, _Reason},
 	    State=#state{cons_ref = Ref})->
     start_consumers_sup_sup(State);
 %% Сообщение о завершении процесса подключения
-handle_info({'EXIT', Conn, Reason}, State=#state{connection = Conn}) ->
-    {stop, {connection_close,Reason}, State};
+handle_info({'EXIT', Conn, _Reason},
+            State=#state{connection = Conn, name=Name, src_config = SrcConfig }) ->
+    stop_consumer_sup_sup(State),
+    Connection = make_connection(Name, SrcConfig#src.amqp_params),
+    start_consumers_sup_sup(State#state{connection=Connection});
 %% Обработка прочих сообщений
 handle_info(_Info, State) ->
     {noreply, State}.
 
 
 %%-----------------------HANDLE TERMINATE-----------------------------
-%% Завершение работы в связи с закрытием подключения
-terminate({connection_close, _Reason}, #state{}) ->
-    ok;
-%% Завершение работы иницированное супервизором
-terminate(Reason, #state{connection = Connection})
-  when Reason =:= shutdown; Reason =:= killed ->
-    connection_close(Connection),
-    ok;
-%% Другие причины завершения работы
 terminate(_Reason, #state{connection = Connection}) ->
     connection_close(Connection),
     ok.
@@ -131,14 +129,14 @@ make_connection(Name, [AmqpParam|Rest])->
             link(Conn),
             Conn;
         {error, Reason} ->
-            io:format("~n!!! Error start connection with reason:~p~n", 
+            io:format("~n!!! Error start connection with reason:~p~n",
                       [Reason]),
             make_connection(Name, Rest)
     end.
 
 %% Функция закрытия подключения
 connection_close(Connection)->
-    amqp_connection:close(Connection),
+    catch(amqp_connection:close(Connection)),
     ok.
 
 %% Функция функция формирования имени подключения на основании
@@ -159,8 +157,15 @@ get_connection_name(_) ->
 start_consumers_sup_sup(S = #state{name = Name,
                                    connection = Connection,
                                    dst_config = Config,
+                                   protocol = Protocol,
                                    supervisor = Supervisor})->
-    CunsSSupSpec = ?CONS_SS_SPEC(Name, Connection, Config),
+    CunsSSupSpec = ?CONS_SS_SPEC(Name, Connection, Protocol, Config),
     {ok, Pid} = supervisor2:start_child(Supervisor, CunsSSupSpec),
     Ref = erlang:monitor(process,Pid),
     {noreply, S#state{cons_ref = Ref}}.
+
+stop_consumer_sup_sup(#state{cons_ref= Ref, supervisor=Sup})->
+    erlang:demonitor(Ref, [flush]),
+    ok = supervisor2:terminate_child(Sup, rabbit_webshovel_consumer_sup_sup),
+   %% ok = supervisor2:delete_child(Sup, rabbit_webshovel_consumer_sup_sup),
+    ok.

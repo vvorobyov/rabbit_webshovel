@@ -10,6 +10,52 @@
 
 -behaviour(gen_server).
 
+-include("rabbit_webshovel.hrl").
+-include_lib("amqp_client/include/amqp_client.hrl").
+
+-define(SUP_SPEC(NAME, SPEC),
+        {NAME,
+         {rabbit_webshovel_publisher_sup, start_link, [SPEC]},
+         temporary,
+         16#ffffffff,
+         supervisor,
+         [rabbit_webshovel_publisher_sup]}).
+
+-define(HTTP_SPEC(ATRS),
+        {rabbit_webshovel_http_endpoint_worker,
+         {rabbit_webshovel_http_endpoint_worker,
+          start_link, [{self(), ATRS}]},
+         temporary,
+         60000,
+         worker,
+         [rabbit_webshovel_http_endpoint_worker]}).
+
+-define(SOAP_SPEC(ATRS),
+        {rabbit_webshovel_soap_endpoint_worker,
+         {rabbit_webshovel_soap_endpoint_worker,
+          start_link, [{self(), ATRS}]},
+         temporary,
+         60000,
+         worker,
+         [rabbit_webshovel_soap_endpoint_worker]}).
+
+-define(AMQP091_SPEC(ATRS),
+        {rabbit_webshovel_amqp091_worker,
+         {rabbit_webshovel_amqp091_worker,
+          start_link, [{self(), ATRS}]},
+         temporary,
+         60000,
+         worker,
+         [rabbit_webshovel_amqp091_worker]}).
+-define(AMQP10_SPEC(ATRS),
+        {rabbit_webshovel_amqp10_worker,
+         {rabbit_webshovel_amqp10_worker,
+          start_link, [{self(), ATRS}]},
+         temporary,
+         60000,
+         worker,
+         [rabbit_webshovel_amqp10_worker]}).
+
 %% API
 -export([start_link/4]).
 -export([publish_message/2]).
@@ -21,14 +67,13 @@
 -define(SERVER, ?MODULE).
 
 -record(state, {ws_name,
+                name,
                 supervisor,
                 consumer,
                 response_sup,
                 endpoint_sup,
                 config,
                 endpoint_msgs =#{}}).
--include("rabbit_webshovel.hrl").
--include_lib("amqp_client/include/amqp_client.hrl").
 
 %%%===================================================================
 %%% API
@@ -45,13 +90,14 @@ init({WSName, Supervisor, Consumer, Config}) ->
     io:format("~n~p ~p ~p ~p~n",[?MODULE,self(),WSName, Config#dst.name]),
     process_flag(trap_exit, true),
     {ok, #state{ws_name = WSName,
+                name = Config#dst.name,
                 supervisor=Supervisor,
                 consumer=Consumer,
-                config=Config}}.
-%    {continue, start_publisher_sup_sup}}.
+                config=Config},
+    {continue, start_publisher_sups}}.
 
-%% handle_continue(start_endpoint_sups, State)->
-%%     start_endpoint_sups(State);
+handle_continue(start_publisher_sups, State)->
+    start_publisher_sups(State);
 %% handle_continue(start_publisher_sup_sup, State) ->
 %%     start_publisher_sup_sup(State);
 handle_continue(_Request, State) ->
@@ -89,28 +135,34 @@ format_status(_Opt, Status) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-%% start_endpoint_sups(State)->
-%%     io:format("~n rabbit_webshovel_publisher_worker~n~p~n", [State]),
-%%     {noreply, State}.
+start_publisher_sups(State0=#state{})->
+    State1 = start_response_sup(State0),
+    State = start_endpoint_sup(State1),
+    io:format("~n rabbit_webshovel_publisher_worker~n~p~n", [State]),
+    {noreply, State}.
 
-%% start_publisher_sup_sup(State)->
-%%     io:format("~p~n", [State]),
-%%     PubSSupSpec = {publisher_super_sup,
-%%                    {rabbit_webshovel_publisher_sup_sup, start_link, []},
-%%                    temporary,
-%%                    16#ffffffff,
-%%                    supervisor,
-%%                    [rabbit_webshovel_publisher_sup_sup]
-%%                   },
-%%     {ok,PubSSPid} = supervisor2:start_child(
-%%                       State#state.supervisor, PubSSupSpec),
-%%     Ref=erlang:monitor(process,PubSSPid),
-%%     EndpointSupSpec = #{id => endpoint_sup,
-%%                         start => {rabbit_webshovel_endpoint_sup,
-%%                                  start_link, [State#state.handle]},
-%%                         restart => permanent,
-%%                         shutdown => 5000,
-%%                         type => supervisor,
-%%                         modules => [rabbit_webshovel_endpoint_sup]},
-%%     {ok,EndpointPid} = supervisor:start_child(PubSSPid, EndpointSupSpec),
-%%     {noreply,State#state{publisher_ssup=Ref, endpoint_sup=EndpointPid}}.
+start_response_sup(S=#state{config = #dst{response = undefined}}) ->
+    S#state{};
+start_response_sup(S=#state{ws_name =WSName, name = Name,
+                            supervisor=Sup,
+                            config = #dst{src_protocol= Protocol,
+                                          response = Response}})->
+    Spec = case Protocol of
+               amqp091 -> ?AMQP091_SPEC({WSName,Name,Response});
+               amqp10  -> ?AMQP10_SPEC({WSName, Name,Response})
+           end,
+    {ok, Pid} = supervisor:start_child( Sup, ?SUP_SPEC(response_sup, Spec)),
+    erlang:monitor(process, Pid),
+    S#state{response_sup=Pid}.
+
+start_endpoint_sup(S=#state{ws_name =WSName, name = Name,
+                            config=#dst{endpoint=Config},
+                           supervisor=Sup})->
+    Spec = case Config#endpoint.protocol of
+               http -> ?HTTP_SPEC({WSName, Name,Config});
+               https -> ?HTTP_SPEC({WSName, Name,Config});
+               soap -> ?SOAP_SPEC({WSName, Name,Config})
+           end,
+    {ok, Pid} = supervisor:start_child( Sup, ?SUP_SPEC(endpoint_sup, Spec)),
+    erlang:monitor(process,Pid),
+    S#state{endpoint_sup=Pid}.

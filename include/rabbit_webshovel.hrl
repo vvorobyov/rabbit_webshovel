@@ -38,6 +38,7 @@
               queue= <<"">>,
               prefetch_count,
               ack_mode,
+              src_protocol,
               endpoint = #endpoint{},
               response}).
 

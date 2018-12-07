@@ -48,7 +48,7 @@
 %% @end
 %%--------------------------------------------------------------------
 start_link() ->
-    case parse_configuration(get_config()) of
+    case parse_configuration(application:get_env(webshovels)) of
         {ok, Configuration} ->
             mirrored_supervisor:start_link(
               {local, ?SERVER}, ?MODULE,
@@ -81,16 +81,11 @@ make_child_specs(Configurations)->
 		end,
 	maps:fold(Fun, [], Configurations).
 
-get_config() ->
-    case catch file:consult("/home/vlad/rabbit_webshovel/include/config.erl") of
-        {ok, [Value]} -> {ok,Value};
-        {error, Error}  ->
-            io:format("~n!!! Error load config!!!~n~p~n", [Error]),
-            {ok,[]}
-    end.
-
+parse_configuration(undefined) ->
+    {ok, #{}};
 parse_configuration({ok, Env}) ->
     parse_configuration(Env, #{}).
+
 
 parse_configuration([], Acc) ->
     {ok, Acc};

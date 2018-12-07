@@ -11,7 +11,7 @@
 -behaviour(supervisor).
 
 %% API
--export([start_link/0]).
+-export([start_link/1]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -21,17 +21,13 @@
 %%%===================================================================
 %%% API functions
 %%%===================================================================
-start_link() ->
-    supervisor:start_link(?MODULE, []).
+start_link(Spec) ->
+    supervisor:start_link(?MODULE, Spec).
 
 %%%===================================================================
 %%% Supervisor callbacks
 %%%===================================================================
--spec init(Args :: term()) ->
-		  {ok, {SupFlags :: supervisor:sup_flags(),
-			[ChildSpec :: supervisor:child_spec()]}} |
-		  ignore.
-init([]) ->
+init(_Spec) ->
     io:format("Publisher SupSup started"),
     SupFlags = #{strategy => one_for_one,
 		 intensity => 1,
