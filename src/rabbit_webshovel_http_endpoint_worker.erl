@@ -24,30 +24,35 @@
 
 -define(SERVER, ?MODULE).
 
--record(state, {handle, deliver, msg, request_id}).
+-record(state, {ws_name,
+                name,
+                publisher,
+                config,
+                deliver,
+                msg,
+                request_id}).
 
 %%%===================================================================
 %%% API
 %%%===================================================================
-start_link(Handle, Msg) ->
-    gen_server:start_link(?MODULE, [Handle, Msg], []).
+start_link(Atrs, Msg) ->
+    gen_server:start_link(?MODULE, [Atrs, Msg], []).
 
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Initializes the server
-%% @end
-%%--------------------------------------------------------------------
-init([Handle,
+init([{Publisher,{WSName, Name, Config}},
       _Msg={Deliver = #'basic.deliver'{},
             AmqpMessage=#amqp_msg{}}]) ->
     process_flag(trap_exit, true),
-    {ok, #state{handle=Handle, deliver= Deliver,
-		msg=AmqpMessage},{continue, publish_message}}.
+    {ok, #state{ws_name=WSName,
+                name=Name,
+                config=Config,
+                publisher=Publisher,
+                deliver=Deliver,
+                msg=AmqpMessage},
+     {continue, publish_message}}.
 
 
 %% Handling continue message

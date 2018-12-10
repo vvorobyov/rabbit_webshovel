@@ -98,8 +98,6 @@ init({WSName, Supervisor, Consumer, Config}) ->
 
 handle_continue(start_publisher_sups, State)->
     start_publisher_sups(State);
-%% handle_continue(start_publisher_sup_sup, State) ->
-%%     start_publisher_sup_sup(State);
 handle_continue(_Request, State) ->
     {noreply,State}.
 
@@ -108,15 +106,14 @@ handle_call(_Request, _From, State) ->
     {reply, Reply, State}.
 
 handle_cast({publish_message,
-             Message={#'basic.deliver'{delivery_tag=_DT},_}},
+             Message={#'basic.deliver'{delivery_tag=DT},_}},
             State) ->
     io:format("~n rabbit_webshovel_publisher_worker ~p~nmessage: ~p~n",
               [self(),Message]),
-    %% {ok, Pid} = supervisor:start_child(State#state.endpoint_sup,[Message]),
-    %% Ref=erlang:monitor(process, Pid),
-    %% EndPointMsg = State#state.endpoint_msgs,
-    %% {noreply,State#state{endpoint_msgs=EndPointMsg#{Ref => DT}}};
-    {noreply,State};
+    {ok, Pid} = supervisor:start_child(State#state.endpoint_sup,[Message]),
+    Ref=erlang:monitor(process, Pid),
+    EndPointMsg = State#state.endpoint_msgs,
+    {noreply,State#state{endpoint_msgs=EndPointMsg#{Ref => DT}}};
 handle_cast(_Request, State) ->
     {noreply, State}.
 

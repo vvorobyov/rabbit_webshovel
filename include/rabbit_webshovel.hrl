@@ -9,7 +9,7 @@
 -define(DEFAULT_CONTENT_TYPE,	"application/octet-stream").
 -define(DEFAULT_ACK_MODE(RESPONSE), case RESPONSE of
                                         true  -> on_broker_confirm;
-                                        false -> on_broker_confirm
+                                        false -> on_endpoint_confirm
                                     end).
 
 -define(SRC_PROTOCOL_ALLOWED_VALUES, [amqp091, amqp10]).
@@ -31,7 +31,12 @@
                    method,
                    publish_properties,
                    publish_headers}).
+-record(broker, {protocol,
+                 exchange,
+                 routing_key
+                }).
 
+-record(rules, {})
 -record(response, {}).
 
 -record(dst, {name,
@@ -40,6 +45,7 @@
               ack_mode,
               src_protocol,
               endpoint = #endpoint{},
+              broker,
               response}).
 
 -record(webshovel, {name,
